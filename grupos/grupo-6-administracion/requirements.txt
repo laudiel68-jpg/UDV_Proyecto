@@ -1,1 +1,7 @@
 # Dependencias del grupo-6-administracion. Una por línea, con versión fija (ej.: libreria==1.2.3).
+# PROVISIONAL: FastAPI está sujeto a la decisión del PM sobre el framework (README §5).
+fastapi==0.142.2
+uvicorn==0.54.0
+# Pruebas automáticas (httpx2 lo usa el cliente de pruebas de FastAPI)
+pytest==9.1.1
+httpx2==2.13.1

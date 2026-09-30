@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Catálogos académicos | UDV</title>
+  <!-- Estilos institucionales del PM: se importan, no se copian ni se modifican. -->
+  <link rel="stylesheet" href="/udv-styles/udv.css">
+  <style>
+    /* Complementos del G6. Solo usan los tokens de udv.css. */
+    .barra-demo {
+      background: rgba(0, 174, 239, .08);
+      border-bottom: 1px solid rgba(0, 174, 239, .25);
+    }
+    .barra-demo__contenido {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: .75rem 1.5rem; padding-top: .75rem; padding-bottom: .75rem;
+      font-size: .85rem; color: #0369A1;
+    }
+    .barra-demo__texto { max-width: 62ch; }
+    .barra-demo__controles { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.25rem; }
+    .barra-demo label { display: flex; align-items: center; gap: .5rem; font-weight: 600; color: var(--udv-navy); }
+    .barra-demo .udv-select { width: auto; padding: .35rem .75rem; font-size: .85rem; }
+
+    .salud { display: inline-flex; align-items: center; gap: .45rem; color: var(--udv-text-muted); }
+    .salud::before {
+      content: ""; width: .55rem; height: .55rem; border-radius: 50%;
+      background: var(--udv-text-muted); flex-shrink: 0;
+    }
+    .salud[data-estado="ok"]::before { background: var(--udv-success); }
+    .salud[data-estado="error"]::before { background: var(--udv-danger); }
+
+    .pagina { padding-top: 2.5rem; padding-bottom: 4rem; }
+    .pagina .udv-section-subtitle { margin-bottom: 1.75rem; max-width: 60ch; }
+
+    .pestanas { display: flex; gap: .5rem; overflow-x: auto; padding: .15rem .15rem .35rem; margin-bottom: 1.75rem; }
+    .pestana {
+      font-family: var(--udv-font); font-size: .85rem; font-weight: 600; color: var(--udv-navy);
+      background: var(--udv-bg-white); border: 1.5px solid #D1D5DB; border-radius: var(--udv-radius-pill);
+      padding: .45rem 1.1rem; cursor: pointer; white-space: nowrap; transition: var(--udv-transition);
+    }
+    .pestana:hover { border-color: var(--udv-navy); }
+    .pestana[aria-selected="true"] { background: var(--udv-navy); border-color: var(--udv-navy); color: var(--udv-text-light); }
+
+    .disposicion { display: grid; grid-template-columns: minmax(0, 1fr) 20rem; gap: 2rem; align-items: start; }
+
+    .barra-lista { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+    .barra-lista h2, .panel h2 { font-size: 1.15rem; font-weight: 700; color: var(--udv-navy); }
+    .barra-lista .udv-input { max-width: 18rem; }
+
+    .celda-codigo { font-weight: 600; white-space: nowrap; }
+    .fila-vacia td { padding: 2.25rem 1rem; text-align: center; color: var(--udv-text-muted); }
+    .estado-activo { background: rgba(22, 163, 74, .12); color: #166534; }
+    .estado-inactivo { background: rgba(107, 114, 128, .15); color: #4B5563; }
+
+    .paginacion {
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+      margin-top: 1rem; font-size: .85rem; color: var(--udv-text-muted);
+    }
+    .paginacion__botones { display: flex; gap: .5rem; }
+
+    .btn-udv-secundario { background: var(--udv-bg-white); color: var(--udv-navy); border: 1.5px solid #D1D5DB; }
+    .btn-udv-secundario:hover:not(:disabled) { border-color: var(--udv-navy); color: var(--udv-navy); }
+    .btn-udv:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    .panel {
+      background: var(--udv-bg-white); border: 1px solid #E5E7EB; border-top: 3px solid var(--udv-gold);
+      border-radius: var(--udv-radius); padding: 1.5rem; box-shadow: var(--udv-shadow-sm);
+      position: sticky; top: calc(72px + 1.5rem);
+    }
+    .panel h2 { margin-bottom: 1rem; }
+    .panel fieldset { border: 0; min-width: 0; }
+    .panel fieldset:disabled .udv-input { background: var(--udv-bg-light); }
+    .panel .btn-udv { width: 100%; justify-content: center; }
+    .ayuda { font-size: .78rem; color: var(--udv-text-muted); }
+    .udv-input-error-msg:empty { display: none; }
+    .casilla { display: flex; align-items: center; gap: .5rem; margin-bottom: 1.25rem; font-size: .9rem; cursor: pointer; }
+    .casilla input { width: 1.1rem; height: 1.1rem; accent-color: var(--udv-navy); }
+    .mensajes .udv-alert { margin: 1rem 0 0; }
+    .panel .mensajes:first-of-type .udv-alert { margin: 0 0 1rem; }
+
+    :focus-visible { outline: 3px solid var(--udv-cyan); outline-offset: 2px; }
+
+    @media (max-width: 900px) {
+      .disposicion { grid-template-columns: 1fr; }
+      .panel { position: static; }
+    }
+    @media (max-width: 480px) {
+      .barra-lista .udv-input { max-width: none; }
+      .paginacion { flex-direction: column; align-items: stretch; text-align: center; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
+      .btn-udv:hover { transform: none; }
+    }
+  </style>
+</head>
+<body>
+
+<header class="udv-header">
+  <a href="/g6/catalogos.html" class="udv-header__logo">
+    <div class="udv-header__logo-text">Universidad Da Vinci<span>de Guatemala</span></div>
+  </a>
+  <nav aria-label="Principal">
+    <ul class="udv-header__nav">
+      <li><a href="/g6/catalogos.html" class="active" aria-current="page">Catálogos</a></li>
+      <li><a href="/docs">Documentación de la API</a></li>
+    </ul>
+  </nav>
+</header>
+
+<div class="barra-demo">
+  <div class="udv-container barra-demo__contenido">
+    <p class="barra-demo__texto">
+      Modo demostración. El inicio de sesión llegará con el Grupo 2; mientras tanto,
+      elige un rol para probar los permisos.
+    </p>
+    <div class="barra-demo__controles">
+      <label>Rol de prueba
+        <select id="rol" class="udv-select">
+          <option value="admin" selected>Administración</option>
+          <option value="teacher">Docente</option>
+          <option value="">Sin sesión</option>
+        </select>
+      </label>
+      <span id="salud" class="salud" role="status">Comprobando la API…</span>
+    </div>
+  </div>
+</div>
+
+<main class="udv-container pagina">
+  <h1 class="udv-section-title">Catálogos académicos</h1>
+  <p class="udv-section-subtitle">
+    Las listas que usa todo el sistema al crear tareas y programas de curso.
+  </p>
+
+  <div id="pestanas" class="pestanas" role="tablist" aria-label="Catálogos"></div>
+
+  <div class="disposicion" id="panel-catalogo" role="tabpanel">
+    <section aria-labelledby="titulo-lista">
+      <div class="barra-lista">
+        <h2 id="titulo-lista">Catálogo</h2>
+        <input id="buscador" class="udv-input" type="search"
+               placeholder="Buscar por código o nombre" aria-label="Buscar en el catálogo">
+      </div>
+
+      <div class="udv-table-wrapper">
+        <table class="udv-table">
+          <thead>
+            <tr><th scope="col">Código</th><th scope="col">Nombre</th><th scope="col">Estado</th></tr>
+          </thead>
+          <tbody id="filas" aria-live="polite"></tbody>
+        </table>
+      </div>
+      <div id="mensaje-lista" class="mensajes"></div>
+
+      <div class="paginacion">
+        <span id="resumen-paginas"></span>
+        <div class="paginacion__botones">
+          <button id="anterior" class="btn-udv btn-udv-sm btn-udv-secundario" type="button">Anterior</button>
+          <button id="siguiente" class="btn-udv btn-udv-sm btn-udv-secundario" type="button">Siguiente</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel" aria-labelledby="titulo-formulario">
+      <h2 id="titulo-formulario">Agregar registro</h2>
+      <div id="aviso-permiso" class="mensajes" hidden>
+        <div class="udv-alert udv-alert-warning" id="aviso-permiso-texto"></div>
+      </div>
+
+      <form id="formulario" novalidate>
+        <fieldset id="campos">
+          <div class="udv-form-group">
+            <label class="udv-label" for="code">Código</label>
+            <input id="code" name="code" class="udv-input" maxlength="20" autocomplete="off"
+                   aria-describedby="ayuda-code error-code">
+            <span id="ayuda-code" class="ayuda">De 2 a 20 caracteres. Se guarda en mayúsculas.</span>
+            <p id="error-code" class="udv-input-error-msg"></p>
+          </div>
+          <div class="udv-form-group">
+            <label class="udv-label" for="name">Nombre</label>
+            <input id="name" name="name" class="udv-input" maxlength="120" autocomplete="off"
+                   aria-describedby="error-name">
+            <p id="error-name" class="udv-input-error-msg"></p>
+          </div>
+          <label class="casilla">
+            <input id="is_active" name="is_active" type="checkbox" checked> Activo
+          </label>
+          <button id="guardar" class="btn-udv btn-udv-primary" type="submit">Guardar</button>
+        </fieldset>
+      </form>
+      <div id="mensaje-formulario" class="mensajes" role="status"></div>
+    </aside>
+  </div>
+</main>
+
+<script>
+  // Cada catálogo corresponde a una ruta del CONTRATO.md del G6: /api/v1/<recurso>
+  const CATALOGOS = [
+    { recurso: "academic-units", titulo: "Unidades académicas", singular: "unidad académica",
+      guardado: "Unidad académica guardada", ejemploCodigo: "FAC-ING", ejemploNombre: "Facultad de Ingeniería" },
+    { recurso: "campuses", titulo: "Sedes", singular: "sede",
+      guardado: "Sede guardada", ejemploCodigo: "NORTE", ejemploNombre: "Sede Norte" },
+    { recurso: "courses", titulo: "Cursos", singular: "curso",
+      guardado: "Curso guardado", ejemploCodigo: "PW-02", ejemploNombre: "Programación Web II" },
+    { recurso: "periods", titulo: "Períodos", singular: "período",
+      guardado: "Período guardado", ejemploCodigo: "2027-S1", ejemploNombre: "Primer semestre 2027" },
+    { recurso: "modalities", titulo: "Modalidades", singular: "modalidad",
+      guardado: "Modalidad guardada", ejemploCodigo: "SEMI", ejemploNombre: "Semipresencial" },
+    { recurso: "areas", titulo: "Áreas", singular: "área",
+      guardado: "Área guardada", ejemploCodigo: "ADM", ejemploNombre: "Administración" },
+  ];
+  const POR_PAGINA = 10;
+
+  const estado = { catalogo: CATALOGOS[0], pagina: 1, busqueda: "", rol: "admin", solicitud: 0 };
+
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    pestanas: $("pestanas"), rol: $("rol"), salud: $("salud"),
+    tituloLista: $("titulo-lista"), buscador: $("buscador"), filas: $("filas"),
+    mensajeLista: $("mensaje-lista"), resumen: $("resumen-paginas"),
+    anterior: $("anterior"), siguiente: $("siguiente"),
+    tituloFormulario: $("titulo-formulario"), avisoPermiso: $("aviso-permiso"),
+    avisoPermisoTexto: $("aviso-permiso-texto"), formulario: $("formulario"),
+    campos: $("campos"), code: $("code"), name: $("name"), activo: $("is_active"),
+    guardar: $("guardar"), mensajeFormulario: $("mensaje-formulario"),
+  };
+
+  class ErrorDeApi extends Error {
+    constructor(estadoHttp, error) {
+      super(error?.message || "No se pudo completar la solicitud.");
+      this.estadoHttp = estadoHttp;
+      this.error = error;
+    }
+  }
+
+  async function llamarApi(ruta, opciones = {}) {
+    const encabezados = { Accept: "application/json" };
+    if (opciones.body) encabezados["Content-Type"] = "application/json";
+    // TEMPORAL: cuando el G2 publique la autenticación, esto se reemplaza por su sesión o token.
+    if (estado.rol) encabezados["X-Demo-Role"] = estado.rol;
+
+    let respuesta;
+    try {
+      respuesta = await fetch(`/api/v1${ruta}`, { ...opciones, headers: encabezados });
+    } catch {
+      throw new ErrorDeApi(0, null);
+    }
+    const cuerpo = await respuesta.json().catch(() => null);
+    if (!respuesta.ok) throw new ErrorDeApi(respuesta.status, cuerpo?.error);
+    return cuerpo;
+  }
+
+  function textoDeError(error) {
+    if (error.estadoHttp === 0) return "No hay conexión con la API. Revisa que el servidor siga corriendo en la terminal.";
+    if (error.estadoHttp === 401) return "Elige un rol de prueba para ver los catálogos.";
+    return error.message;
+  }
+
+  function mostrarAlerta(contenedor, tipo, texto) {
+    contenedor.replaceChildren();
+    if (!texto) return;
+    const alerta = document.createElement("div");
+    alerta.className = `udv-alert udv-alert-${tipo}`;
+    alerta.textContent = texto;
+    contenedor.append(alerta);
+  }
+
+  // ── Pestañas ─────────────────────────────────────────────────
+  function crearPestanas() {
+    CATALOGOS.forEach((catalogo, indice) => {
+      const boton = document.createElement("button");
+      boton.type = "button";
+      boton.className = "pestana";
+      boton.setAttribute("role", "tab");
+      boton.id = `pestana-${catalogo.recurso}`;
+      boton.setAttribute("aria-controls", "panel-catalogo");
+      boton.textContent = catalogo.titulo;
+      boton.addEventListener("click", () => cambiarCatalogo(catalogo));
+      boton.addEventListener("keydown", (evento) => {
+        const paso = { ArrowRight: 1, ArrowLeft: -1 }[evento.key];
+        if (!paso) return;
+        const siguiente = CATALOGOS[(indice + paso + CATALOGOS.length) % CATALOGOS.length];
+        cambiarCatalogo(siguiente);
+        $(`pestana-${siguiente.recurso}`).focus();
+      });
+      el.pestanas.append(boton);
+    });
+  }
+
+  function cambiarCatalogo(catalogo) {
+    estado.catalogo = catalogo;
+    estado.pagina = 1;
+    estado.busqueda = "";
+    el.buscador.value = "";
+    for (const boton of el.pestanas.children) {
+      const activa = boton.id === `pestana-${catalogo.recurso}`;
+      boton.setAttribute("aria-selected", String(activa));
+      boton.tabIndex = activa ? 0 : -1;
+    }
+    $("panel-catalogo").setAttribute("aria-labelledby", `pestana-${catalogo.recurso}`);
+    el.tituloLista.textContent = catalogo.titulo;
+    el.tituloFormulario.textContent = `Agregar ${catalogo.singular}`;
+    el.guardar.textContent = `Guardar ${catalogo.singular}`;
+    el.code.placeholder = `Ej. ${catalogo.ejemploCodigo}`;
+    el.name.placeholder = `Ej. ${catalogo.ejemploNombre}`;
+    el.formulario.reset();
+    limpiarErroresDeCampos();
+    mostrarAlerta(el.mensajeFormulario, null);
+    cargarLista();
+  }
+
+  // ── Lista ────────────────────────────────────────────────────
+  async function cargarLista() {
+    const numero = ++estado.solicitud;
+    const parametros = new URLSearchParams({ page: estado.pagina, per_page: POR_PAGINA });
+    if (estado.busqueda) parametros.set("q", estado.busqueda);
+
+    el.filas.setAttribute("aria-busy", "true");
+    try {
+      const resultado = await llamarApi(`/${estado.catalogo.recurso}?${parametros}`);
+      if (numero !== estado.solicitud) return; // Llegó una respuesta vieja: se ignora.
+      const ultimaPagina = Math.max(1, Math.ceil(resultado.total / resultado.per_page));
+      if (estado.pagina > ultimaPagina) {
+        estado.pagina = ultimaPagina;
+        return cargarLista();
+      }
+      pintarFilas(resultado.data);
+      pintarPaginacion(resultado.page, ultimaPagina, resultado.total);
+      mostrarAlerta(el.mensajeLista, null);
+    } catch (error) {
+      if (numero !== estado.solicitud) return;
+      el.filas.replaceChildren();
+      pintarPaginacion(1, 1, 0);
+      mostrarAlerta(el.mensajeLista, "danger", textoDeError(error));
+    } finally {
+      if (numero === estado.solicitud) el.filas.removeAttribute("aria-busy");
+    }
+  }
+
+  function pintarFilas(registros) {
+    if (registros.length === 0) {
+      const fila = document.createElement("tr");
+      fila.className = "fila-vacia";
+      const celda = document.createElement("td");
+      celda.colSpan = 3;
+      celda.textContent = estado.busqueda
+        ? `Ningún registro coincide con "${estado.busqueda}".`
+        : `Todavía no hay registros en ${estado.catalogo.titulo.toLowerCase()}.`
+          + (estado.rol === "admin" ? " Agrega el primero con el formulario." : "");
+      fila.append(celda);
+      el.filas.replaceChildren(fila);
+      return;
+    }
+    // Se usa textContent en lugar de innerHTML para que ningún dato se interprete como HTML.
+    el.filas.replaceChildren(...registros.map((registro) => {
+      const fila = document.createElement("tr");
+      const codigo = document.createElement("td");
+      codigo.className = "celda-codigo";
+      codigo.textContent = registro.code;
+      const nombre = document.createElement("td");
+      nombre.textContent = registro.name;
+      const celdaEstado = document.createElement("td");
+      const insignia = document.createElement("span");
+      insignia.className = `udv-badge ${registro.is_active ? "estado-activo" : "estado-inactivo"}`;
+      insignia.textContent = registro.is_active ? "Activo" : "Inactivo";
+      celdaEstado.append(insignia);
+      fila.append(codigo, nombre, celdaEstado);
+      return fila;
+    }));
+  }
+
+  function pintarPaginacion(pagina, ultimaPagina, total) {
+    const registros = total === 1 ? "1 registro" : `${total} registros`;
+    el.resumen.textContent = `Página ${pagina} de ${ultimaPagina}, ${registros}`;
+    el.anterior.disabled = pagina <= 1;
+    el.siguiente.disabled = pagina >= ultimaPagina;
+  }
+
+  let temporizadorBusqueda;
+  el.buscador.addEventListener("input", () => {
+    clearTimeout(temporizadorBusqueda);
+    temporizadorBusqueda = setTimeout(() => {
+      estado.busqueda = el.buscador.value.trim();
+      estado.pagina = 1;
+      cargarLista();
+    }, 300);
+  });
+  el.anterior.addEventListener("click", () => { estado.pagina -= 1; cargarLista(); });
+  el.siguiente.addEventListener("click", () => { estado.pagina += 1; cargarLista(); });
+
+  // ── Formulario ───────────────────────────────────────────────
+  function actualizarPermisos() {
+    const esAdministracion = estado.rol === "admin";
+    el.campos.disabled = !esAdministracion;
+    el.avisoPermiso.hidden = esAdministracion;
+    el.avisoPermisoTexto.textContent = estado.rol === "teacher"
+      ? "Como docente puedes consultar los catálogos, pero solo administración puede agregar registros. Aunque alguien envíe la solicitud directo a la API, el servidor la rechaza."
+      : "Elige un rol de prueba para usar el formulario.";
+  }
+
+  function limpiarErroresDeCampos() {
+    for (const campo of [el.code, el.name]) {
+      campo.classList.remove("error");
+      campo.removeAttribute("aria-invalid");
+      $(`error-${campo.id}`).textContent = "";
+    }
+  }
+
+  function pintarErroresDeCampos(detalles) {
+    let primero = null;
+    for (const [campo, mensaje] of Object.entries(detalles || {})) {
+      const entrada = $(campo);
+      const destino = $(`error-${campo}`);
+      if (!entrada || !destino) continue;
+      entrada.classList.add("error");
+      entrada.setAttribute("aria-invalid", "true");
+      destino.textContent = mensaje;
+      primero ??= entrada;
+    }
+    primero?.focus();
+  }
+
+  el.formulario.addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    limpiarErroresDeCampos();
+    mostrarAlerta(el.mensajeFormulario, null);
+
+    const catalogo = estado.catalogo;
+    const datos = { code: el.code.value, name: el.name.value, is_active: el.activo.checked };
+    el.guardar.disabled = true;
+    el.guardar.textContent = "Guardando…";
+    try {
+      const creado = await llamarApi(`/${catalogo.recurso}`, { method: "POST", body: JSON.stringify(datos) });
+      el.formulario.reset();
+      mostrarAlerta(el.mensajeFormulario, "success", `${catalogo.guardado}: ${creado.code}.`);
+      await cargarLista();
+      el.code.focus();
+    } catch (error) {
+      pintarErroresDeCampos(error.error?.details);
+      mostrarAlerta(el.mensajeFormulario, "danger", textoDeError(error));
+    } finally {
+      el.guardar.disabled = false;
+      el.guardar.textContent = `Guardar ${estado.catalogo.singular}`;
+    }
+  });
+
+  el.rol.addEventListener("change", () => {
+    estado.rol = el.rol.value;
+    mostrarAlerta(el.mensajeFormulario, null);
+    limpiarErroresDeCampos();
+    actualizarPermisos();
+    cargarLista();
+  });
+
+  // ── Estado del servicio (GET /api/v1/health) ─────────────────
+  async function revisarSalud() {
+    try {
+      const respuesta = await fetch("/api/v1/health", { headers: { Accept: "application/json" } });
+      const salud = await respuesta.json();
+      const enLinea = respuesta.ok && salud.status === "ok";
+      el.salud.dataset.estado = enLinea ? "ok" : "error";
+      el.salud.textContent = enLinea
+        ? `API en línea, versión ${salud.version} (${salud.environment})`
+        : "La API responde con problemas";
+    } catch {
+      el.salud.dataset.estado = "error";
+      el.salud.textContent = "La API no responde";
+    }
+  }
+
+  crearPestanas();
+  actualizarPermisos();
+  cambiarCatalogo(CATALOGOS[0]);
+  revisarSalud();
+  setInterval(revisarSalud, 30000);
+</script>
+</body>
+</html>
