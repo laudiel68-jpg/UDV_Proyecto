@@ -1,0 +1,9 @@
+# Mantenido por el PM. Lo mínimo para que el punto de entrada (main.py) arranque
+# aunque ningún grupo haya integrado aún su requirements.txt a main.
+# Mismas versiones que la tabla oficial del README §5: si un grupo declara la
+# misma librería, debe ser con exactamente esta versión.
+fastapi==0.142.1
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.1
+PyMySQL==1.1.1
+cryptography==44.0.2  # PyMySQL la necesita para el login por defecto de MySQL 8 (caching_sha2_password)

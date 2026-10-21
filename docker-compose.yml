@@ -1,0 +1,55 @@
+# Entorno local completo (mantenido por el PM): MySQL con la base del G1 + la API.
+#
+#   cp .env.example .env        (y cambiar las contraseñas)
+#   docker compose up --build
+#
+#   API:      http://localhost:8000/api/v1/docs
+#   Salud:    http://localhost:8000/health  y  /health/db
+#   MySQL:    localhost:3307  (usuario y clave del .env)
+#
+# Volver a crear la base desde cero (borra los datos locales):
+#   docker compose down -v && docker compose up --build
+
+services:
+  db:
+    # Misma versión mayor que el MySQL de Railway: confirmar con SELECT VERSION();
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Falta MYSQL_ROOT_PASSWORD en .env}
+      MYSQL_DATABASE: db_udv
+      MYSQL_USER: ${MYSQL_USER:-udv_app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Falta MYSQL_PASSWORD en .env}
+      TZ: America/Guatemala
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    ports:
+      - "${MYSQL_PORT_LOCAL:-3307}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # Solo corre la primera vez (volumen vacío). Script oficial del G1;
+      # G1_SQL permite probar otro archivo sin tocar el repo.
+      - ${G1_SQL:-./grupos/grupo-1-base-de-datos/Docs/sql/db_udv_completo.sql}:/docker-entrypoint-initdb.d/01_db_udv.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-udv_app}:${MYSQL_PASSWORD}@db:3306/db_udv
+      PORT: 8000
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+
+volumes:
+  mysql-data:

@@ -1,5 +1,7 @@
 # Mantenido por el PM (README §4). No agregar librerías aquí:
 # cada grupo las declara en su propio requirements.txt.
+# Excepción: requirements-base.txt (PM) trae lo mínimo para que main.py arranque.
+-r requirements-base.txt
 -r grupos/grupo-1-base-de-datos/requirements.txt
 -r grupos/grupo-2-api-seguridad/requirements.txt
 -r grupos/grupo-3-workflow-tareas/requirements.txt
