@@ -11,14 +11,15 @@ import os
 import time
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, FastAPI, Header, Query, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Header, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
 from .catalogos import CATALOGOS, Catalogo, RepositorioEnMemoria, ServicioCatalogos
-from .datos_ejemplo import cargar_datos_ejemplo
+from .datos_ejemplo import cargar_datos_ejemplo, cargar_notificaciones_ejemplo
 from .errores import ErrorApi, no_autenticado
+from .notificaciones import RepositorioNotificacionesEnMemoria, ServicioNotificaciones
 from .paginacion import PER_PAGE_MAXIMO
 from .salud import estado_del_servicio
 from .seguridad import USUARIOS_DEMO, Usuario
@@ -67,6 +68,22 @@ class PaginaRegistros(BaseModel):
     data: list[RegistroSalida]
 
 
+class NotificacionSalida(BaseModel):
+    id: int
+    event: str
+    message: str
+    is_read: bool
+    created_at: str
+    read_at: str | None
+
+
+class PaginaNotificaciones(BaseModel):
+    page: int
+    per_page: int
+    total: int
+    data: list[NotificacionSalida]
+
+
 class EstadoSalud(BaseModel):
     status: str
     service: str
@@ -79,7 +96,7 @@ class EstadoSalud(BaseModel):
 
 def _errores(*codigos: int) -> dict[int | str, dict[str, Any]]:
     descripciones = {400: "Solicitud mal formada", 401: "No autenticado",
-                     403: "Sin permiso", 409: "Conflicto",
+                     403: "Sin permiso", 404: "No existe", 409: "Conflicto",
                      422: "Error de validación con detalle por campo"}
     return {c: {"model": ErrorRespuesta, "description": descripciones[c]}
             for c in codigos}
@@ -114,7 +131,12 @@ def usuario_actual(
     return usuario
 
 
+def obtener_notificaciones(request: Request) -> ServicioNotificaciones:
+    return request.app.state.g6_notificaciones
+
+
 Servicio = Annotated[ServicioCatalogos, Depends(obtener_servicio)]
+Notificaciones = Annotated[ServicioNotificaciones, Depends(obtener_notificaciones)]
 UsuarioActual = Annotated[Usuario, Depends(usuario_actual)]
 
 # ── Rutas ───────────────────────────────────────────────────────────────────
@@ -172,6 +194,33 @@ def _registrar_catalogo(catalogo: Catalogo) -> None:
 for _catalogo in CATALOGOS.values():
     _registrar_catalogo(_catalogo)
 
+
+@router.get("/notifications", tags=["Notificaciones"],
+            response_model=PaginaNotificaciones,
+            summary="Listar mis notificaciones (las más recientes primero)",
+            responses=_errores(401, 422))
+def listar_notificaciones(
+    servicio: Notificaciones,
+    usuario: UsuarioActual,
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[int, Query(ge=1, le=PER_PAGE_MAXIMO)] = 20,
+    unread: Annotated[bool, Query(
+        description="true muestra solo las que no se han leído")] = False,
+) -> dict[str, Any]:
+    return servicio.listar(usuario, page=page, per_page=per_page, no_leidas=unread)
+
+
+@router.patch("/notifications/{notificacion_id}/read", tags=["Notificaciones"],
+              response_model=NotificacionSalida,
+              summary="Marcar como leída una notificación propia",
+              responses=_errores(401, 404, 422))
+def marcar_notificacion_leida(
+    notificacion_id: Annotated[int, Path(ge=1)],
+    servicio: Notificaciones,
+    usuario: UsuarioActual,
+) -> dict[str, Any]:
+    return servicio.marcar_leida(usuario, notificacion_id)
+
 # ── Instalación en una app ──────────────────────────────────────────────────
 
 
@@ -183,10 +232,16 @@ def instalar(app: FastAPI, *, auth_demo: bool = False,
              datos_ejemplo: bool = False) -> None:
     """Conecta las rutas del G6 bajo /api/v1 en la app que se le pase."""
     servicio = ServicioCatalogos(RepositorioEnMemoria())
+    notificaciones = ServicioNotificaciones(RepositorioNotificacionesEnMemoria())
     if datos_ejemplo:
         cargar_datos_ejemplo(servicio)
+        cargar_notificaciones_ejemplo(notificaciones)
 
     app.state.g6_catalogos = servicio
+    # Los grupos 3, 4 y 5 entregan sus eventos con
+    # app.state.g6_notificaciones.procesar_evento(evento) mientras el PM
+    # define el transporte de eventos (README §5).
+    app.state.g6_notificaciones = notificaciones
     app.state.g6_auth_demo = auth_demo
     app.state.g6_iniciado_en = time.monotonic()
     app.include_router(router, prefix="/api/v1")
