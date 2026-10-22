@@ -56,6 +56,21 @@ def test_crear_un_registro_de_catalogo_queda_auditado(cliente):
     assert registro["created_at"].startswith(HOY)
 
 
+def test_modificar_un_registro_de_catalogo_queda_auditado(cliente):
+    creado = cliente.post("/api/v1/areas", json={"code": "SIS", "name": "Sistemas"},
+                          headers=ADMIN).json()
+    cliente.patch(f"/api/v1/areas/{creado['id']}", json={"is_active": False}, headers=ADMIN)
+    # Un cambio rechazado (docente) no se audita.
+    cliente.patch(f"/api/v1/areas/{creado['id']}", json={"name": "Otra"}, headers=DOCENTE)
+
+    ultimo = auditoria(cliente).json()["data"][0]
+
+    assert auditoria(cliente).json()["total"] == 2
+    assert (ultimo["action"], ultimo["entity"], ultimo["entity_id"]) == (
+        "update", "areas", creado["id"])
+    assert ultimo["changes"] == {"is_active": False}
+
+
 def test_una_operacion_rechazada_no_deja_registro(cliente):
     cliente.post("/api/v1/campuses", json={"code": "NORTE", "name": "Sede"}, headers=DOCENTE)
     cliente.post("/api/v1/campuses", json={"code": "x"}, headers=ADMIN)
