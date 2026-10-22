@@ -11,8 +11,9 @@ ahora (CONTRATO.md del G6 §5).
 | Catálogos | `GET` y `POST` en `/api/v1/academic-units`, `/campuses`, `/courses`, `/periods`, `/modalities` y `/areas` | G6-01, G6-02, G6-03, G6-21 a G6-25 |
 | Modificar un registro de catálogo | `PATCH /api/v1/<catálogo>/{id}` (solo administración; solo cambia los campos enviados) | G6-01, G6-02, G6-03 |
 | Pantalla de catálogos | `/g6/catalogos.html` | G6-01, G6-02 |
+| Notificaciones | `GET /api/v1/notifications` y `PATCH /api/v1/notifications/{id}/read` | G6-04 a G6-13, G6-18 (en lo que toca a notificaciones) |
 
-Hay 71 pruebas automáticas en `tests/`.
+Hay 101 pruebas automáticas en `tests/`.
 
 ## Cómo correrlo
 
@@ -58,11 +59,36 @@ Lo mismo vale para `PATCH /api/v1/campuses/{registro_id}`: con `teacher` es
 registro no existe, `409` si el código ya está en uso y `422` si el cuerpo
 viene vacío).
 
+## Cómo entregan sus eventos los grupos 3, 4 y 5
+
+Cada evento es un objeto con un `id` único (si llega dos veces, no se
+duplica), el nombre oficial, los destinatarios y los datos del mensaje:
+
+```python
+app.state.g6_notificaciones.procesar_evento({
+    "id": "entrega-58-devuelta-1",
+    "name": "assignment.returned",
+    "recipients": [12],               # id del docente
+    "data": {"task_title": "Sílabo", "comment": "Falta la bibliografía."},
+})
+```
+
+| Evento | Datos obligatorios en `data` |
+|---|---|
+| `task.published`, `assignment.due_soon` | `task_title`, `due_date` |
+| `assignment.submitted`, `assignment.approved`, `task.cancelled` | `task_title` |
+| `assignment.returned` | `task_title`, `comment` |
+| `program.authorized` | `program_name` |
+
+Si falta algo, responde 422 y no se guarda ninguna notificación. Una persona
+solo ve y marca sus propias notificaciones; la de otra responde 404.
+
 ## Cómo está organizado
 
 | Archivo | Qué hace | ¿Depende del framework? |
 |---|---|---|
 | `g6_admin/catalogos.py` | Reglas de catálogos: validación, permiso, búsqueda, orden y paginación | No |
+| `g6_admin/notificaciones.py` | Eventos oficiales, mensaje de cada uno, sin duplicados y "solo el destinatario marca como leída" | No |
 | `g6_admin/salud.py` | Arma la respuesta de `/health` sin exponer detalles internos | No |
 | `g6_admin/seguridad.py` | Usuario y regla "solo administración modifica catálogos" | No |
 | `g6_admin/errores.py` | Formato de error del contrato común | No |
@@ -87,6 +113,8 @@ código.
 | Máximo de `per_page` en 100 | Lo documenta el G2 en el OpenAPI | El valor del G2 |
 | Repositorio en memoria | Las tablas son del G1 | Un repositorio con los mismos métodos que use las tablas del G1 |
 | Campos `code`, `name`, `is_active` | Las columnas reales las fija el diccionario de datos del G1 | Los campos del G1 (por ejemplo, fechas del período) |
+| Entrega de eventos con `app.state.g6_notificaciones.procesar_evento(evento)` | El transporte de eventos lo decide el PM con G3 (README §5) | El mecanismo que se apruebe; la lógica de `notificaciones.py` no cambia |
+| Repositorio de notificaciones en memoria | La tabla es del G1 | Una tabla del G1 con llave única (`evento_id`, `usuario_id`) y una transacción por evento |
 | Verificación de base de datos en `/health` | Todavía no hay motor ni conexión | Una consulta mínima a la base |
 
 ## Variables de entorno
