@@ -12,8 +12,9 @@ ahora (CONTRATO.md del G6 §5).
 | Modificar un registro de catálogo | `PATCH /api/v1/<catálogo>/{id}` (solo administración; solo cambia los campos enviados) | G6-01, G6-02, G6-03 |
 | Pantalla de catálogos | `/g6/catalogos.html` | G6-01, G6-02 |
 | Notificaciones | `GET /api/v1/notifications` y `PATCH /api/v1/notifications/{id}/read` | G6-04 a G6-13, G6-18 (en lo que toca a notificaciones) |
+| Auditoría | `GET /api/v1/audit` (solo administración) con filtros `user_id`, `from`, `to`, `entity` y `action` | G6-14, G6-15, G6-30 a G6-33 |
 
-Hay 101 pruebas automáticas en `tests/`.
+Hay 130 pruebas automáticas en `tests/`.
 
 ## Cómo correrlo
 
@@ -83,12 +84,33 @@ app.state.g6_notificaciones.procesar_evento({
 Si falta algo, responde 422 y no se guarda ninguna notificación. Una persona
 solo ve y marca sus propias notificaciones; la de otra responde 404.
 
+## Cómo registran sus transiciones el G3 y el G5 (G6-15)
+
+El contrato común pide que toda transición guarde actor, fecha, estado
+anterior, estado nuevo y comentario. La fecha la pone el G6:
+
+```python
+app.state.g6_auditoria.registrar_transicion(
+    actor_id=12,                     # quién hizo el cambio
+    entidad="assignment",            # task, assignment o program_version
+    entidad_id=58,
+    estado_anterior="in_progress",
+    estado_nuevo="submitted",
+    comentario="Entrego la planificación.",  # opcional, hasta 1000 caracteres
+)
+```
+
+Solo se aceptan los estados oficiales de CONTRATO_COMUN.md §2; si algo no
+cuadra responde 422 y no se guarda nada. Las altas y los cambios de catálogos
+ya se auditan solos.
+
 ## Cómo está organizado
 
 | Archivo | Qué hace | ¿Depende del framework? |
 |---|---|---|
 | `g6_admin/catalogos.py` | Reglas de catálogos: validación, permiso, búsqueda, orden y paginación | No |
 | `g6_admin/notificaciones.py` | Eventos oficiales, mensaje de cada uno, sin duplicados y "solo el destinatario marca como leída" | No |
+| `g6_admin/auditoria.py` | Registro de acciones y transiciones que solo se agrega (no se edita ni se borra) y su consulta filtrada | No |
 | `g6_admin/salud.py` | Arma la respuesta de `/health` sin exponer detalles internos | No |
 | `g6_admin/seguridad.py` | Usuario y regla "solo administración modifica catálogos" | No |
 | `g6_admin/errores.py` | Formato de error del contrato común | No |
@@ -115,6 +137,8 @@ código.
 | Campos `code`, `name`, `is_active` | Las columnas reales las fija el diccionario de datos del G1 | Los campos del G1 (por ejemplo, fechas del período) |
 | Entrega de eventos con `app.state.g6_notificaciones.procesar_evento(evento)` | El transporte de eventos lo decide el PM con G3 (README §5) | El mecanismo que se apruebe; la lógica de `notificaciones.py` no cambia |
 | Repositorio de notificaciones en memoria | La tabla es del G1 | Una tabla del G1 con llave única (`evento_id`, `usuario_id`) y una transacción por evento |
+| Registro de transiciones con `app.state.g6_auditoria.registrar_transicion(...)` | El G3 y el G5 todavía no están en `main` | La misma llamada desde su código, dentro de la operación que cambia el estado |
+| Repositorio de auditoría en memoria | La tabla es del G1 | Una tabla del G1 sin permisos de UPDATE ni DELETE |
 | Verificación de base de datos en `/health` | Todavía no hay motor ni conexión | Una consulta mínima a la base |
 
 ## Variables de entorno

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .auditoria import ServicioAuditoria
 from .errores import conflicto, no_encontrado, sin_cambios, validacion
 from .paginacion import PER_PAGE_PREDETERMINADO, paginar
 from .seguridad import Usuario, exigir_administrador
@@ -176,8 +177,10 @@ def validar_registro(datos: Any, *, parcial: bool = False) -> dict[str, Any]:
 
 
 class ServicioCatalogos:
-    def __init__(self, repositorio: RepositorioEnMemoria) -> None:
+    def __init__(self, repositorio: RepositorioEnMemoria,
+                 auditoria: ServicioAuditoria | None = None) -> None:
         self.repositorio = repositorio
+        self.auditoria = auditoria
 
     def obtener_catalogo(self, recurso: str) -> Catalogo:
         catalogo = CATALOGOS.get(recurso)
@@ -215,6 +218,10 @@ class ServicioCatalogos:
                 f"El código {limpio['code']} ya existe en {catalogo.nombre}.",
                 {"code": "Este código ya está en uso."},
             ) from None
+        if self.auditoria is not None:
+            self.auditoria.registrar(actor_id=usuario.id, accion="create",
+                                     entidad=recurso, entidad_id=registro.id,
+                                     cambios=limpio)
         return registro.como_dict()
 
     def modificar(self, recurso: str, registro_id: int, datos: Any,
@@ -234,4 +241,8 @@ class ServicioCatalogos:
                 f"El código {cambios['code']} ya existe en {catalogo.nombre}.",
                 {"code": "Este código ya está en uso."},
             ) from None
+        if self.auditoria is not None:
+            self.auditoria.registrar(actor_id=usuario.id, accion="update",
+                                     entidad=recurso, entidad_id=registro.id,
+                                     cambios=cambios)
         return registro.como_dict()

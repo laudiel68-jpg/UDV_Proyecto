@@ -11,11 +11,14 @@ import os
 import time
 from typing import Annotated, Any
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, FastAPI, Header, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
+from .auditoria import RepositorioAuditoriaEnMemoria, ServicioAuditoria
 from .catalogos import CATALOGOS, Catalogo, RepositorioEnMemoria, ServicioCatalogos
 from .datos_ejemplo import cargar_datos_ejemplo, cargar_notificaciones_ejemplo
 from .errores import ErrorApi, no_autenticado
@@ -99,6 +102,26 @@ class PaginaNotificaciones(BaseModel):
     data: list[NotificacionSalida]
 
 
+class RegistroAuditoriaSalida(BaseModel):
+    id: int
+    actor_id: int
+    action: str
+    entity: str
+    entity_id: int
+    created_at: str
+    from_state: str | None
+    to_state: str | None
+    comment: str | None
+    changes: dict[str, Any]
+
+
+class PaginaAuditoria(BaseModel):
+    page: int
+    per_page: int
+    total: int
+    data: list[RegistroAuditoriaSalida]
+
+
 class EstadoSalud(BaseModel):
     status: str
     service: str
@@ -150,8 +173,13 @@ def obtener_notificaciones(request: Request) -> ServicioNotificaciones:
     return request.app.state.g6_notificaciones
 
 
+def obtener_auditoria(request: Request) -> ServicioAuditoria:
+    return request.app.state.g6_auditoria
+
+
 Servicio = Annotated[ServicioCatalogos, Depends(obtener_servicio)]
 Notificaciones = Annotated[ServicioNotificaciones, Depends(obtener_notificaciones)]
+Auditoria = Annotated[ServicioAuditoria, Depends(obtener_auditoria)]
 UsuarioActual = Annotated[Usuario, Depends(usuario_actual)]
 
 # ── Rutas ───────────────────────────────────────────────────────────────────
@@ -248,6 +276,27 @@ def marcar_notificacion_leida(
 ) -> dict[str, Any]:
     return servicio.marcar_leida(usuario, notificacion_id)
 
+
+@router.get("/audit", tags=["Auditoría"], response_model=PaginaAuditoria,
+            summary="Consultar la auditoría (solo administración)",
+            responses=_errores(401, 403, 422))
+def consultar_auditoria(
+    servicio: Auditoria,
+    usuario: UsuarioActual,
+    user_id: Annotated[int | None, Query(ge=1, description="Quién hizo la acción")] = None,
+    from_: Annotated[date | None, Query(alias="from",
+                                        description="Desde este día (AAAA-MM-DD, UTC)")] = None,
+    to: Annotated[date | None, Query(description="Hasta este día, incluido")] = None,
+    entity: Annotated[str | None, Query(max_length=120,
+                                        description="Por ejemplo campuses, assignment o program_version")] = None,
+    action: Annotated[str | None, Query(max_length=120,
+                                        description="Por ejemplo create o transition")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[int, Query(ge=1, le=PER_PAGE_MAXIMO)] = 20,
+) -> dict[str, Any]:
+    return servicio.consultar(usuario, actor_id=user_id, desde=from_, hasta=to,
+                              entidad=entity, accion=action, page=page, per_page=per_page)
+
 # ── Instalación en una app ──────────────────────────────────────────────────
 
 
@@ -258,7 +307,8 @@ async def _responder_error_api(_request: Request, error: ErrorApi) -> JSONRespon
 def instalar(app: FastAPI, *, auth_demo: bool = False,
              datos_ejemplo: bool = False) -> None:
     """Conecta las rutas del G6 bajo /api/v1 en la app que se le pase."""
-    servicio = ServicioCatalogos(RepositorioEnMemoria())
+    auditoria = ServicioAuditoria(RepositorioAuditoriaEnMemoria())
+    servicio = ServicioCatalogos(RepositorioEnMemoria(), auditoria)
     notificaciones = ServicioNotificaciones(RepositorioNotificacionesEnMemoria())
     if datos_ejemplo:
         cargar_datos_ejemplo(servicio)
@@ -269,6 +319,9 @@ def instalar(app: FastAPI, *, auth_demo: bool = False,
     # app.state.g6_notificaciones.procesar_evento(evento) mientras el PM
     # define el transporte de eventos (README §5).
     app.state.g6_notificaciones = notificaciones
+    # El G3 y el G5 registran sus cambios de estado con
+    # app.state.g6_auditoria.registrar_transicion(...) (README del G6).
+    app.state.g6_auditoria = auditoria
     app.state.g6_auth_demo = auth_demo
     app.state.g6_iniciado_en = time.monotonic()
     app.include_router(router, prefix="/api/v1")
