@@ -19,6 +19,11 @@ def crear(cliente, recurso="campuses", datos=None, encabezados=ADMIN):
                        headers=encabezados)
 
 
+def modificar(cliente, registro_id, datos, recurso="campuses", encabezados=ADMIN):
+    return cliente.patch(f"/api/v1/{recurso}/{registro_id}", json=datos,
+                         headers=encabezados)
+
+
 # ── G6-01 y G6-21 a G6-25: administración crea y el registro aparece ──────
 
 @pytest.mark.parametrize("recurso", RECURSOS)
@@ -88,6 +93,106 @@ def test_servicio_rechaza_docente_sin_pasar_por_http():
     servicio = ServicioCatalogos(RepositorioEnMemoria())
     with pytest.raises(ErrorApi) as error:
         servicio.crear("campuses", VALIDO, USUARIOS_DEMO["teacher"])
+    assert error.value.estado_http == 403
+
+
+# ── G6-01 a G6-03: modificar un registro (PATCH) ──────────────────────────
+
+@pytest.mark.parametrize("recurso", RECURSOS)
+def test_admin_modifica_registro_y_el_cambio_se_guarda(cliente, recurso):
+    creado = crear(cliente, recurso).json()
+
+    respuesta = modificar(cliente, creado["id"], {"name": " Sede  Norte 2 "}, recurso)
+
+    assert respuesta.status_code == 200
+    modificado = respuesta.json()
+    assert modificado["name"] == "Sede Norte 2"
+    assert modificado["code"] == creado["code"]
+    lista = cliente.get(f"/api/v1/{recurso}", headers=DOCENTE).json()
+    assert lista["data"][0]["name"] == "Sede Norte 2"
+
+
+def test_admin_puede_desactivar_y_cambiar_codigo(cliente):
+    creado = crear(cliente).json()
+    respuesta = modificar(cliente, creado["id"], {"code": "norte-2", "is_active": False})
+    assert respuesta.status_code == 200
+    assert (respuesta.json()["code"], respuesta.json()["is_active"]) == ("NORTE-2", False)
+
+
+@pytest.mark.parametrize("recurso", RECURSOS)
+def test_docente_no_puede_modificar(cliente, recurso):
+    creado = crear(cliente, recurso).json()
+
+    respuesta = modificar(cliente, creado["id"], {"name": "Cambio sin permiso"},
+                          recurso, encabezados=DOCENTE)
+
+    assert respuesta.status_code == 403
+    assert respuesta.json()["error"]["code"] == "FORBIDDEN"
+    lista = cliente.get(f"/api/v1/{recurso}", headers=ADMIN).json()
+    assert lista["data"][0]["name"] == VALIDO["name"]
+
+
+def test_docente_recibe_403_al_modificar_antes_que_404_o_422(cliente):
+    # Un docente no puede averiguar qué registros existen ni probar datos.
+    assert modificar(cliente, 999, {"name": "x"}, encabezados=DOCENTE).status_code == 403
+    assert modificar(cliente, 999, {}, encabezados=DOCENTE).status_code == 403
+
+
+def test_sin_sesion_no_puede_modificar(cliente):
+    creado = crear(cliente).json()
+    respuesta = modificar(cliente, creado["id"], {"name": "Sin sesión"}, encabezados={})
+    assert respuesta.status_code == 401
+    assert respuesta.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_modificar_registro_inexistente_da_404(cliente):
+    respuesta = modificar(cliente, 999, {"name": "No existe"})
+    assert respuesta.status_code == 404
+    assert respuesta.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_registro_de_otro_catalogo_da_404(cliente):
+    creado = crear(cliente, "campuses").json()
+    assert modificar(cliente, creado["id"], {"name": "Otra"}, "areas").status_code == 404
+
+
+def test_modificar_sin_campos_da_422(cliente):
+    creado = crear(cliente).json()
+    respuesta = modificar(cliente, creado["id"], {})
+    assert respuesta.status_code == 422
+    assert respuesta.json()["error"]["code"] == "EMPTY_UPDATE"
+
+
+def test_modificar_valida_los_campos_enviados(cliente):
+    creado = crear(cliente).json()
+    respuesta = modificar(cliente, creado["id"], {"code": "A", "name": None})
+    assert respuesta.status_code == 422
+    assert set(respuesta.json()["error"]["details"]) == {"code", "name"}
+    assert cliente.get("/api/v1/campuses", headers=ADMIN).json()["data"][0]["code"] == "NORTE"
+
+
+def test_modificar_a_un_codigo_ya_usado_da_409(cliente):
+    crear(cliente)
+    otro = crear(cliente, datos={"code": "SUR", "name": "Sede Sur"}).json()
+
+    respuesta = modificar(cliente, otro["id"], {"code": "norte"})
+
+    assert respuesta.status_code == 409
+    assert set(respuesta.json()["error"]["details"]) == {"code"}
+
+
+def test_modificar_conservando_su_propio_codigo(cliente):
+    creado = crear(cliente).json()
+    respuesta = modificar(cliente, creado["id"], {"code": "NORTE", "name": "Norte"})
+    assert respuesta.status_code == 200
+
+
+def test_servicio_rechaza_que_docente_modifique_sin_pasar_por_http():
+    servicio = ServicioCatalogos(RepositorioEnMemoria())
+    creado = servicio.crear("campuses", VALIDO, USUARIOS_DEMO["admin"])
+    with pytest.raises(ErrorApi) as error:
+        servicio.modificar("campuses", creado["id"], {"name": "Otra"},
+                           USUARIOS_DEMO["teacher"])
     assert error.value.estado_http == 403
 
 
@@ -204,3 +309,4 @@ def test_openapi_incluye_las_rutas_de_catalogos_del_contrato(cliente):
     rutas = cliente.get("/openapi.json").json()["paths"]
     for recurso in RECURSOS:
         assert {"get", "post"} <= set(rutas[f"/api/v1/{recurso}"])
+        assert "patch" in rutas[f"/api/v1/{recurso}/{{registro_id}}"]

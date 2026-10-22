@@ -46,3 +46,8 @@ def conflicto(mensaje: str, detalles: dict[str, Any] | None = None) -> ErrorApi:
 def validacion(detalles: dict[str, Any]) -> ErrorApi:
     """422 con el detalle por campo que pide el contrato común."""
     return ErrorApi(422, "VALIDATION_ERROR", "Revisa los campos marcados.", detalles)
+
+
+def sin_cambios() -> ErrorApi:
+    """422 de un PATCH que no trae ningún campo para modificar."""
+    return ErrorApi(422, "EMPTY_UPDATE", "Envía al menos un campo para modificar.")
