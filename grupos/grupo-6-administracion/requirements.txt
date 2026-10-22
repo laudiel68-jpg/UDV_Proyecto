@@ -1,7 +1,9 @@
-# Dependencias del grupo-6-administracion. Una por línea, con versión fija (ej.: libreria==1.2.3).
+# Dependencias del grupo-6-administracion. Una por línea, con versión fija (README §5).
 # PROVISIONAL: FastAPI está sujeto a la decisión del PM sobre el framework (README §5).
-fastapi==0.142.2
+# Mismas versiones que requirements-base.txt del PM: si difieren, pip no puede
+# instalar desde la raíz.
+fastapi==0.142.1
 uvicorn==0.54.0
-# Pruebas automáticas (httpx2 lo usa el cliente de pruebas de FastAPI)
+# Pruebas automáticas (httpx lo usa el TestClient de FastAPI)
 pytest==9.1.1
-httpx2==2.13.1
+httpx==0.28.1
