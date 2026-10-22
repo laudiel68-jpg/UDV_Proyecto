@@ -9,10 +9,11 @@ ahora (CONTRATO.md del G6 §5).
 |---|---|---|
 | Estado del servicio | `GET /api/v1/health` | G6-34, G6-36 (en lo que toca a esta ruta) |
 | Catálogos | `GET` y `POST` en `/api/v1/academic-units`, `/campuses`, `/courses`, `/periods`, `/modalities` y `/areas` | G6-01, G6-02, G6-03, G6-21 a G6-25 |
+| Modificar un registro de catálogo | `PATCH /api/v1/<catálogo>/{id}` (solo administración; solo cambia los campos enviados) | G6-01, G6-02, G6-03 |
 | Pantalla de catálogos | `/g6/catalogos.html` | G6-01, G6-02 |
 | Notificaciones | `GET /api/v1/notifications` y `PATCH /api/v1/notifications/{id}/read` | G6-04 a G6-13, G6-18 (en lo que toca a notificaciones) |
 
-Hay 79 pruebas automáticas en `tests/`.
+Hay 101 pruebas automáticas en `tests/`.
 
 ## Cómo correrlo
 
@@ -52,6 +53,11 @@ python -m pytest
    `{"code": "NORTE", "name": "Sede Norte"}`.
 4. Presiona **Execute**. La respuesta es `403` con el formato de error común.
    Con `admin` la respuesta es `201`.
+
+Lo mismo vale para `PATCH /api/v1/campuses/{registro_id}`: con `teacher` es
+`403` aunque el registro no exista, y con `admin` es `200` (o `404` si el
+registro no existe, `409` si el código ya está en uso y `422` si el cuerpo
+viene vacío).
 
 ## Cómo entregan sus eventos los grupos 3, 4 y 5
 

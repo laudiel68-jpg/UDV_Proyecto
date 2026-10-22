@@ -1,7 +1,7 @@
 """Catálogos académicos (escenarios G6-01 a G6-03 y G6-21 a G6-25).
 
-Aquí vive toda la lógica: qué catálogos existen, cómo se valida un registro,
-quién puede crearlo y cómo se lista con búsqueda y paginación.
+Aquí vive toda la lógica: qué catálogos existen, cómo se valida un registro o
+un cambio, quién puede crearlo o modificarlo y cómo se lista con búsqueda y paginación.
 
 Este archivo NO importa FastAPI a propósito. El framework todavía está
 pendiente (README §5); si el PM elige otro, esta lógica se conserva tal cual y
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .errores import conflicto, no_encontrado, validacion
+from .errores import conflicto, no_encontrado, sin_cambios, validacion
 from .paginacion import PER_PAGE_PREDETERMINADO, paginar
 from .seguridad import Usuario, exigir_administrador
 
@@ -61,11 +61,15 @@ class CodigoDuplicado(Exception):
     pass
 
 
+class RegistroNoEncontrado(Exception):
+    pass
+
+
 class RepositorioEnMemoria:
     """Guarda los registros en memoria mientras el G1 entrega las tablas.
 
     Los datos se pierden al reiniciar el servidor. Cuando exista la base, se
-    crea un repositorio con los mismos métodos (listar y agregar) que use las
+    crea un repositorio con los mismos métodos (listar, agregar y modificar) que use las
     tablas del G1, y el resto del código no cambia.
     """
 
@@ -92,6 +96,21 @@ class RepositorioEnMemoria:
             self._registros[recurso].append(registro)
             return registro
 
+    def modificar(self, recurso: str, registro_id: int,
+                  cambios: dict[str, Any]) -> Registro:
+        with self._candado:
+            registro = next((r for r in self._registros[recurso]
+                             if r.id == registro_id), None)
+            if registro is None:
+                raise RegistroNoEncontrado(registro_id)
+            code = cambios.get("code")
+            if code is not None and any(r.code == code and r.id != registro_id
+                                        for r in self._registros[recurso]):
+                raise CodigoDuplicado(code)
+            for campo, valor in cambios.items():
+                setattr(registro, campo, valor)
+            return registro
+
 
 def _normalizar_busqueda(texto: str) -> str:
     """Minúsculas y sin tildes, para que "periodo" encuentre "Período"."""
@@ -99,21 +118,27 @@ def _normalizar_busqueda(texto: str) -> str:
     return "".join(c for c in descompuesto if unicodedata.category(c) != "Mn")
 
 
-def validar_registro(datos: Any) -> dict[str, Any]:
-    """Valida y limpia los datos de un registro nuevo.
+def validar_registro(datos: Any, *, parcial: bool = False) -> dict[str, Any]:
+    """Valida y limpia los datos de un registro nuevo o de un cambio.
 
-    Devuelve {"code", "name", "is_active"} o lanza un 422 con el error de cada
-    campo, como pide el contrato común.
+    Un registro nuevo devuelve {"code", "name", "is_active"}. Un cambio
+    (parcial=True) devuelve solo los campos enviados, y sin campos es un 422
+    EMPTY_UPDATE. Los errores salen como un 422 con el error de cada campo,
+    como pide el contrato común.
     """
     if not isinstance(datos, dict):
         raise validacion({"_body": "Envía un objeto JSON."})
+    if parcial and not datos:
+        raise sin_cambios()
 
     errores: dict[str, str] = {}
     for campo in sorted(set(datos) - CAMPOS_PERMITIDOS):
         errores[campo] = "Campo no reconocido."
 
     code = datos.get("code")
-    if code is None or (isinstance(code, str) and not code.strip()):
+    if parcial and "code" not in datos:
+        pass  # Un cambio solo valida los campos que trae.
+    elif code is None or (isinstance(code, str) and not code.strip()):
         errores["code"] = "El código es obligatorio."
     elif not isinstance(code, str):
         errores["code"] = "El código debe ser texto."
@@ -124,7 +149,9 @@ def validar_registro(datos: Any) -> dict[str, Any]:
                                "números, guion o guion bajo.")
 
     name = datos.get("name")
-    if name is None or (isinstance(name, str) and not name.strip()):
+    if parcial and "name" not in datos:
+        pass  # Un cambio solo valida los campos que trae.
+    elif name is None or (isinstance(name, str) and not name.strip()):
         errores["name"] = "El nombre es obligatorio."
     elif not isinstance(name, str):
         errores["name"] = "El nombre debe ser texto."
@@ -135,12 +162,17 @@ def validar_registro(datos: Any) -> dict[str, Any]:
                                "caracteres.")
 
     is_active = datos.get("is_active", True)
-    if not isinstance(is_active, bool):
+    if parcial and "is_active" not in datos:
+        pass  # Un cambio solo valida los campos que trae.
+    elif not isinstance(is_active, bool):
         errores["is_active"] = "Debe ser verdadero o falso."
 
     if errores:
         raise validacion(errores)
-    return {"code": code, "name": name, "is_active": is_active}
+    limpio = {"code": code, "name": name, "is_active": is_active}
+    if parcial:
+        return {campo: limpio[campo] for campo in datos}
+    return limpio
 
 
 class ServicioCatalogos:
@@ -181,6 +213,25 @@ class ServicioCatalogos:
         except CodigoDuplicado:
             raise conflicto(
                 f"El código {limpio['code']} ya existe en {catalogo.nombre}.",
+                {"code": "Este código ya está en uso."},
+            ) from None
+        return registro.como_dict()
+
+    def modificar(self, recurso: str, registro_id: int, datos: Any,
+                  usuario: Usuario) -> dict[str, Any]:
+        catalogo = self.obtener_catalogo(recurso)
+        # Igual que al crear: primero el permiso, para que un docente no pueda
+        # averiguar qué registros existen ni probar datos.
+        exigir_administrador(usuario, f"modificar el catálogo de {catalogo.nombre}")
+        cambios = validar_registro(datos, parcial=True)
+        try:
+            registro = self.repositorio.modificar(recurso, registro_id, cambios)
+        except RegistroNoEncontrado:
+            raise no_encontrado(
+                f"No existe el registro {registro_id} en {catalogo.nombre}.") from None
+        except CodigoDuplicado:
+            raise conflicto(
+                f"El código {cambios['code']} ya existe en {catalogo.nombre}.",
                 {"code": "Este código ya está en uso."},
             ) from None
         return registro.como_dict()

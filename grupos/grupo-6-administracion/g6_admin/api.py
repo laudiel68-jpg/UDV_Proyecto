@@ -53,6 +53,21 @@ class RegistroNuevo(BaseModel):
         None, description="Opcional. Si se omite, el registro queda activo.")
 
 
+class RegistroCambio(BaseModel):
+    """Solo se cambian los campos enviados; las reglas son las del alta."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str | None = Field(
+        None, examples=["CENTRAL"],
+        description="Opcional. Mismas reglas que al agregar; no puede repetirse.")
+    name: str | None = Field(
+        None, examples=["Campus Central"],
+        description="Opcional. De 2 a 120 caracteres.")
+    is_active: bool | None = Field(
+        None, description="Opcional. false desactiva el registro.")
+
+
 class RegistroSalida(BaseModel):
     id: int
     code: str
@@ -189,6 +204,18 @@ def _registrar_catalogo(catalogo: Catalogo) -> None:
               usuario: UsuarioActual) -> dict[str, Any]:
         return servicio.crear(catalogo.recurso,
                               datos.model_dump(exclude_unset=True), usuario)
+
+    @router.patch(f"{ruta}/{{registro_id}}", tags=["Catálogos"],
+                  response_model=RegistroSalida,
+                  summary=f"Modificar un registro de {catalogo.nombre} "
+                          "(solo administración)",
+                  operation_id=f"modificar_{sufijo}",
+                  responses=_errores(400, 401, 403, 404, 409, 422))
+    def modificar(registro_id: Annotated[int, Path(ge=1)],
+                  datos: RegistroCambio, servicio: Servicio,
+                  usuario: UsuarioActual) -> dict[str, Any]:
+        return servicio.modificar(catalogo.recurso, registro_id,
+                                  datos.model_dump(exclude_unset=True), usuario)
 
 
 for _catalogo in CATALOGOS.values():
