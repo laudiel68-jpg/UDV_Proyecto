@@ -58,12 +58,21 @@
     .casilla { display: flex; align-items: center; gap: .5rem; margin-bottom: 1.25rem; font-size: .9rem; cursor: pointer; }
     .casilla input { width: 1.1rem; height: 1.1rem; accent-color: var(--udv-navy); }
     .mensajes .udv-alert { margin: 1rem 0 0; }
+    .acciones-formulario { display: flex; flex-direction: column; gap: .5rem; }
+    .celda-acciones { text-align: right; white-space: nowrap; }
+    .fila-editando { background: rgba(212, 175, 55, .12); }
+    .login { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; align-items: end; margin-top: .75rem; }
+    .login .udv-form-group { margin: 0; }
+    .barra-sesion { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: flex-end; margin-bottom: 1rem; font-size: .85rem; color: var(--udv-text-muted); }
     .panel .mensajes:first-of-type .udv-alert { margin: 0 0 1rem; }
 
     :focus-visible { outline: 3px solid var(--udv-cyan); outline-offset: 2px; }
 
+    /* udv.css da display a los botones: sin esto, hidden no los oculta. */
+    [hidden] { display: none !important; }
+
     @media (max-width: 900px) {
-      .disposicion { grid-template-columns: 1fr; }
+      .disposicion { grid-template-columns: minmax(0, 1fr); }
       .panel { position: static; }
     }
     @media (max-width: 480px) {
@@ -96,10 +105,27 @@
     Las listas que usa todo el sistema al crear tareas y programas de curso.
   </p>
 
+  <div id="barra-sesion" class="barra-sesion" hidden>
+    <span id="usuario-sesion"></span>
+    <button id="salir" class="btn-udv btn-udv-sm btn-udv-secundario" type="button">Cerrar sesión</button>
+  </div>
+
+  <!-- Inicio de sesión con el servicio del G2 (POST /api/v1/auth/login). -->
   <div id="aviso-sesion" class="mensajes aviso-sesion" hidden>
     <div class="udv-alert udv-alert-warning">
       Inicia sesión para ver y administrar los catálogos.
-      <a id="enlace-inicio-sesion" href="#">Ir al inicio de sesión</a>
+      <form id="form-login" class="login" novalidate>
+        <div class="udv-form-group">
+          <label class="udv-label" for="login-correo">Correo</label>
+          <input id="login-correo" class="udv-input" type="email" autocomplete="username" required>
+        </div>
+        <div class="udv-form-group">
+          <label class="udv-label" for="login-clave">Contraseña</label>
+          <input id="login-clave" class="udv-input" type="password" autocomplete="current-password" required>
+        </div>
+        <button id="entrar" class="btn-udv btn-udv-primary" type="submit">Entrar</button>
+      </form>
+      <div id="mensaje-login" class="mensajes" role="status"></div>
     </div>
   </div>
 
@@ -116,7 +142,8 @@
       <div class="udv-table-wrapper">
         <table class="udv-table">
           <thead>
-            <tr><th scope="col">Código</th><th scope="col">Nombre</th><th scope="col">Estado</th></tr>
+            <tr><th scope="col">Código</th><th scope="col">Nombre</th><th scope="col">Estado</th>
+                <th scope="col"><span class="ayuda">Acciones</span></th></tr>
           </thead>
           <tbody id="filas" aria-live="polite"></tbody>
         </table>
@@ -147,16 +174,21 @@
             <span id="ayuda-code" class="ayuda">De 2 a 20 caracteres. Se guarda en mayúsculas.</span>
             <p id="error-code" class="udv-input-error-msg"></p>
           </div>
-          <div class="udv-form-group">
+          <div class="udv-form-group" id="grupo-name">
             <label class="udv-label" for="name">Nombre</label>
-            <input id="name" name="name" class="udv-input" maxlength="120" autocomplete="off"
+            <input id="name" name="name" class="udv-input" maxlength="150" autocomplete="off"
                    aria-describedby="error-name">
             <p id="error-name" class="udv-input-error-msg"></p>
           </div>
+          <!-- Campos propios de cada tabla del G1 (créditos, fechas, facultad, ...). -->
+          <div id="campos-extra"></div>
           <label class="casilla">
             <input id="is_active" name="is_active" type="checkbox" checked> Activo
           </label>
-          <button id="guardar" class="btn-udv btn-udv-primary" type="submit">Guardar</button>
+          <div class="acciones-formulario">
+            <button id="guardar" class="btn-udv btn-udv-primary" type="submit">Guardar</button>
+            <button id="cancelar" class="btn-udv btn-udv-secundario" type="button" hidden>Cancelar cambios</button>
+          </div>
         </fieldset>
       </form>
       <div id="mensaje-formulario" class="mensajes" role="status"></div>
@@ -165,53 +197,79 @@
 </main>
 
 <script>
-  // Cada catálogo corresponde a una ruta del CONTRATO.md del G6: /api/v1/<recurso>
+  // Cada catálogo corresponde a una ruta del CONTRATO.md del G6: /api/v1/<recurso>.
+  // "campos" son las columnas propias de su tabla en la base del G1.
   const CATALOGOS = [
     { recurso: "academic-units", titulo: "Unidades académicas", singular: "unidad académica",
-      guardado: "Unidad académica guardada", ejemploCodigo: "FAC-ING", ejemploNombre: "Facultad de Ingeniería" },
+      guardado: "Unidad académica guardada", ejemploCodigo: "UA-ING-N",
+      ejemploNombre: "Ingeniería en Sistemas - Sede Norte", maxNombre: 150,
+      campos: [
+        { id: "faculty_id", etiqueta: "Facultad", tipo: "lista", opciones: "/faculties" },
+        { id: "campus_id", etiqueta: "Sede", tipo: "lista", opciones: "/campuses?active=true&per_page=100" },
+      ] },
     { recurso: "campuses", titulo: "Sedes", singular: "sede",
-      guardado: "Sede guardada", ejemploCodigo: "NORTE", ejemploNombre: "Sede Norte" },
+      guardado: "Sede guardada", ejemploCodigo: "S-NOR", ejemploNombre: "Sede Norte", maxNombre: 150,
+      campos: [{ id: "address", etiqueta: "Dirección (opcional)", tipo: "texto", maximo: 300, opcional: true }] },
     { recurso: "courses", titulo: "Cursos", singular: "curso",
-      guardado: "Curso guardado", ejemploCodigo: "PW-02", ejemploNombre: "Programación Web II" },
-    { recurso: "periods", titulo: "Períodos", singular: "período",
-      guardado: "Período guardado", ejemploCodigo: "2027-S1", ejemploNombre: "Primer semestre 2027" },
+      guardado: "Curso guardado", ejemploCodigo: "ISW-302", ejemploNombre: "Programación Web II", maxNombre: 150,
+      campos: [{ id: "credits", etiqueta: "Créditos", tipo: "numero", minimo: 1, maximo: 30 }] },
+    { recurso: "periods", titulo: "Períodos", singular: "período", sinNombre: true,
+      guardado: "Período guardado", ejemploCodigo: "2027-2",
+      campos: [
+        { id: "year", etiqueta: "Año", tipo: "numero", minimo: 2000, maximo: 2100 },
+        { id: "cycle", etiqueta: "Ciclo", tipo: "numero", minimo: 1, maximo: 4 },
+        { id: "start_date", etiqueta: "Fecha de inicio", tipo: "fecha" },
+        { id: "end_date", etiqueta: "Fecha de fin", tipo: "fecha" },
+      ] },
     { recurso: "modalities", titulo: "Modalidades", singular: "modalidad",
-      guardado: "Modalidad guardada", ejemploCodigo: "SEMI", ejemploNombre: "Semipresencial" },
+      guardado: "Modalidad guardada", ejemploCodigo: "SEMI", ejemploNombre: "Semipresencial", maxNombre: 100,
+      campos: [] },
     { recurso: "areas", titulo: "Áreas", singular: "área",
-      guardado: "Área guardada", ejemploCodigo: "ADM", ejemploNombre: "Administración" },
+      guardado: "Área guardada", ejemploCodigo: "ADM", ejemploNombre: "Administración", maxNombre: 100,
+      campos: [] },
   ];
   const POR_PAGINA = 10;
 
   // ── Sesión del Grupo 2 ───────────────────────────────────────
-  // El inicio de sesión es del G2: esta pantalla solo usa el token que su
-  // pantalla de login guarda y lo manda como "Authorization: Bearer <token>".
-  // Si el G2 usa otra clave o ruta, solo se cambian estas dos líneas.
+  // El login es del G2: esta pantalla llama a su POST /api/v1/auth/login, guarda
+  // el token solo en esta pestaña (sessionStorage) y lo manda como
+  // "Authorization: Bearer <token>". Si la pantalla de login del G2 guarda el
+  // token con esta misma clave, la sesión se comparte sin volver a entrar.
   const CLAVE_TOKEN = "udv_token";
-  const PAGINA_INICIO_SESION = "/g2/index.html";
   const ROL_ADMINISTRACION = "admin"; // Código de la tabla rol del G1.
 
   function leerToken() {
     try {
-      return localStorage.getItem(CLAVE_TOKEN) || sessionStorage.getItem(CLAVE_TOKEN);
+      return sessionStorage.getItem(CLAVE_TOKEN) || localStorage.getItem(CLAVE_TOKEN);
     } catch {
       return null;
     }
   }
 
+  function guardarToken(token) {
+    try {
+      if (token) sessionStorage.setItem(CLAVE_TOKEN, token);
+      else { sessionStorage.removeItem(CLAVE_TOKEN); localStorage.removeItem(CLAVE_TOKEN); }
+    } catch { /* Sin almacenamiento: la sesión dura lo que la página. */ }
+  }
+
   // puedeAgregar: true o false según los roles de /me; null si aún no se sabe
   // (en ese caso el servidor decide y la pantalla se ajusta si responde 403).
-  const estado = { catalogo: CATALOGOS[0], pagina: 1, busqueda: "", puedeAgregar: null, conSesion: true, solicitud: 0 };
+  // editando: el registro que se está modificando, o null si se agrega uno nuevo.
+  const estado = { catalogo: CATALOGOS[0], pagina: 1, busqueda: "", puedeAgregar: null,
+                   conSesion: true, solicitud: 0, editando: null, registros: [] };
 
   const $ = (id) => document.getElementById(id);
   const el = {
-    pestanas: $("pestanas"), avisoSesion: $("aviso-sesion"),
+    pestanas: $("pestanas"), avisoSesion: $("aviso-sesion"), barraSesion: $("barra-sesion"),
     tituloLista: $("titulo-lista"), buscador: $("buscador"), filas: $("filas"),
     mensajeLista: $("mensaje-lista"), resumen: $("resumen-paginas"),
     anterior: $("anterior"), siguiente: $("siguiente"),
     tituloFormulario: $("titulo-formulario"), avisoPermiso: $("aviso-permiso"),
     avisoPermisoTexto: $("aviso-permiso-texto"), formulario: $("formulario"),
-    campos: $("campos"), code: $("code"), name: $("name"), activo: $("is_active"),
-    guardar: $("guardar"), mensajeFormulario: $("mensaje-formulario"),
+    campos: $("campos"), code: $("code"), name: $("name"), grupoNombre: $("grupo-name"),
+    extra: $("campos-extra"), activo: $("is_active"),
+    guardar: $("guardar"), cancelar: $("cancelar"), mensajeFormulario: $("mensaje-formulario"),
   };
 
   class ErrorDeApi extends Error {
@@ -235,7 +293,7 @@
       throw new ErrorDeApi(0, null);
     }
     const cuerpo = await respuesta.json().catch(() => null);
-    if (respuesta.status === 401) mostrarSinSesion();
+    if (respuesta.status === 401 && !opciones.sinAvisoDeSesion) mostrarSinSesion();
     if (!respuesta.ok) throw new ErrorDeApi(respuesta.status, cuerpo?.error);
     return cuerpo;
   }
@@ -243,7 +301,7 @@
   function textoDeError(error) {
     if (error.estadoHttp === 0) return "No hay conexión con la API. Revisa que el servidor siga corriendo.";
     if (error.estadoHttp === 401) return "Tu sesión no está activa. Inicia sesión para continuar.";
-    if (error.estadoHttp === 403) return "Solo administración puede agregar registros.";
+    if (error.estadoHttp === 403) return "Solo administración puede agregar o modificar registros.";
     return error.message;
   }
 
@@ -290,14 +348,80 @@
     }
     $("panel-catalogo").setAttribute("aria-labelledby", `pestana-${catalogo.recurso}`);
     el.tituloLista.textContent = catalogo.titulo;
-    el.tituloFormulario.textContent = `Agregar ${catalogo.singular}`;
-    el.guardar.textContent = `Guardar ${catalogo.singular}`;
     el.code.placeholder = `Ej. ${catalogo.ejemploCodigo}`;
-    el.name.placeholder = `Ej. ${catalogo.ejemploNombre}`;
-    el.formulario.reset();
-    limpiarErroresDeCampos();
+    el.grupoNombre.hidden = Boolean(catalogo.sinNombre);
+    el.name.placeholder = catalogo.ejemploNombre ? `Ej. ${catalogo.ejemploNombre}` : "";
+    el.name.maxLength = catalogo.maxNombre || 150;
+    crearCamposExtra(catalogo);
+    terminarEdicion();
     mostrarAlerta(el.mensajeFormulario, null);
     cargarLista();
+  }
+
+  // ── Campos propios de cada catálogo ──────────────────────────
+  function crearCamposExtra(catalogo) {
+    el.extra.replaceChildren(...catalogo.campos.map((campo) => {
+      const grupo = document.createElement("div");
+      grupo.className = "udv-form-group";
+      const etiqueta = document.createElement("label");
+      etiqueta.className = "udv-label";
+      etiqueta.htmlFor = campo.id;
+      etiqueta.textContent = campo.etiqueta;
+      let entrada;
+      if (campo.tipo === "lista") {
+        entrada = document.createElement("select");
+        cargarOpciones(entrada, campo.opciones);
+      } else {
+        entrada = document.createElement("input");
+        entrada.type = { numero: "number", fecha: "date" }[campo.tipo] || "text";
+        if (campo.minimo !== undefined) entrada.min = campo.minimo;
+        if (campo.maximo !== undefined) {
+          if (campo.tipo === "texto") entrada.maxLength = campo.maximo;
+          else entrada.max = campo.maximo;
+        }
+        entrada.autocomplete = "off";
+      }
+      entrada.id = campo.id;
+      entrada.name = campo.id;
+      entrada.className = "udv-input";
+      entrada.setAttribute("aria-describedby", `error-${campo.id}`);
+      const error = document.createElement("p");
+      error.id = `error-${campo.id}`;
+      error.className = "udv-input-error-msg";
+      grupo.append(etiqueta, entrada, error);
+      return grupo;
+    }));
+  }
+
+  async function cargarOpciones(lista, ruta) {
+    const vacia = new Option("Elige una opción", "");
+    lista.replaceChildren(vacia);
+    try {
+      const respuesta = await llamarApi(ruta);
+      const elementos = Array.isArray(respuesta) ? respuesta : respuesta.data;
+      for (const elemento of elementos) {
+        lista.append(new Option(`${elemento.name} (${elemento.code})`, elemento.id));
+      }
+      if (estado.editando) lista.value = estado.editando[lista.id] ?? "";
+    } catch {
+      vacia.textContent = "No se pudieron cargar las opciones";
+    }
+  }
+
+  function leerFormulario(catalogo) {
+    const datos = { code: el.code.value, is_active: el.activo.checked };
+    if (!catalogo.sinNombre) datos.name = el.name.value;
+    for (const campo of catalogo.campos) {
+      const valor = $(campo.id).value.trim();
+      if (campo.tipo === "numero" || campo.tipo === "lista") {
+        // Un número inválido se manda tal cual para que el servidor diga qué falla.
+        datos[campo.id] = valor === "" ? null : (Number.isInteger(Number(valor)) ? Number(valor) : valor);
+      } else {
+        datos[campo.id] = valor === "" ? null : valor;
+      }
+      if (datos[campo.id] === null && !campo.opcional && !estado.editando) delete datos[campo.id];
+    }
+    return datos;
   }
 
   // ── Lista ────────────────────────────────────────────────────
@@ -315,6 +439,7 @@
         estado.pagina = ultimaPagina;
         return cargarLista();
       }
+      estado.registros = resultado.data;
       pintarFilas(resultado.data);
       pintarPaginacion(resultado.page, ultimaPagina, resultado.total);
       mostrarAlerta(el.mensajeLista, null);
@@ -333,7 +458,7 @@
       const fila = document.createElement("tr");
       fila.className = "fila-vacia";
       const celda = document.createElement("td");
-      celda.colSpan = 3;
+      celda.colSpan = 4;
       celda.textContent = estado.busqueda
         ? `Ningún registro coincide con "${estado.busqueda}".`
         : `Todavía no hay registros en ${estado.catalogo.titulo.toLowerCase()}.`
@@ -345,6 +470,7 @@
     // Se usa textContent en lugar de innerHTML para que ningún dato se interprete como HTML.
     el.filas.replaceChildren(...registros.map((registro) => {
       const fila = document.createElement("tr");
+      if (estado.editando?.id === registro.id) fila.className = "fila-editando";
       const codigo = document.createElement("td");
       codigo.className = "celda-codigo";
       codigo.textContent = registro.code;
@@ -355,7 +481,18 @@
       insignia.className = `udv-badge ${registro.is_active ? "estado-activo" : "estado-inactivo"}`;
       insignia.textContent = registro.is_active ? "Activo" : "Inactivo";
       celdaEstado.append(insignia);
-      fila.append(codigo, nombre, celdaEstado);
+      const acciones = document.createElement("td");
+      acciones.className = "celda-acciones";
+      if (estado.puedeAgregar !== false) {
+        const editar = document.createElement("button");
+        editar.type = "button";
+        editar.className = "btn-udv btn-udv-sm btn-udv-secundario";
+        editar.textContent = "Editar";
+        editar.setAttribute("aria-label", `Editar ${registro.code}`);
+        editar.addEventListener("click", () => empezarEdicion(registro));
+        acciones.append(editar);
+      }
+      fila.append(codigo, nombre, celdaEstado, acciones);
       return fila;
     }));
   }
@@ -379,18 +516,52 @@
   el.anterior.addEventListener("click", () => { estado.pagina -= 1; cargarLista(); });
   el.siguiente.addEventListener("click", () => { estado.pagina += 1; cargarLista(); });
 
-  // ── Formulario ───────────────────────────────────────────────
+  // ── Agregar y modificar ──────────────────────────────────────
+  function empezarEdicion(registro) {
+    estado.editando = registro;
+    el.code.value = registro.code;
+    el.name.value = registro.name ?? "";
+    el.activo.checked = registro.is_active;
+    for (const campo of estado.catalogo.campos) $(campo.id).value = registro[campo.id] ?? "";
+    limpiarErroresDeCampos();
+    mostrarAlerta(el.mensajeFormulario, null);
+    actualizarTextosFormulario();
+    pintarFilas(estado.registros);
+    el.code.focus();
+  }
+
+  function terminarEdicion() {
+    estado.editando = null;
+    el.formulario.reset();
+    limpiarErroresDeCampos();
+    actualizarTextosFormulario();
+  }
+
+  function actualizarTextosFormulario() {
+    const { singular } = estado.catalogo;
+    const editando = Boolean(estado.editando);
+    el.tituloFormulario.textContent = editando ? `Modificar ${estado.editando.code}` : `Agregar ${singular}`;
+    el.guardar.textContent = editando ? "Guardar cambios" : `Guardar ${singular}`;
+    el.cancelar.hidden = !editando;
+  }
+
+  el.cancelar.addEventListener("click", () => {
+    terminarEdicion();
+    pintarFilas(estado.registros);
+  });
+
   function actualizarPermisos() {
     const bloqueado = estado.puedeAgregar === false;
     el.campos.disabled = bloqueado;
     el.avisoPermiso.hidden = !bloqueado;
     el.avisoPermisoTexto.textContent = estado.conSesion
-      ? "Puedes consultar los catálogos, pero solo administración puede agregar registros."
-      : "Inicia sesión como administración para agregar registros.";
+      ? "Puedes consultar los catálogos, pero solo administración puede agregar o modificar registros."
+      : "Inicia sesión como administración para agregar o modificar registros.";
   }
 
   function mostrarSinSesion() {
     el.avisoSesion.hidden = false;
+    el.barraSesion.hidden = true;
     estado.conSesion = false;
     estado.puedeAgregar = false;
     actualizarPermisos();
@@ -398,12 +569,15 @@
 
   // Roles del usuario con sesión, con GET /api/v1/me del G2.
   async function cargarSesion() {
-    $("enlace-inicio-sesion").href = PAGINA_INICIO_SESION;
     if (!leerToken()) return mostrarSinSesion();
     try {
       const yo = await llamarApi("/me");
       const roles = (yo?.roles || []).map((r) => (typeof r === "string" ? r : r?.codigo ?? r?.code ?? r?.rol));
       estado.puedeAgregar = roles.includes(ROL_ADMINISTRACION);
+      estado.conSesion = true;
+      el.avisoSesion.hidden = true;
+      el.barraSesion.hidden = false;
+      $("usuario-sesion").textContent = `Sesión: ${yo.correo}`;
     } catch (error) {
       if (error.estadoHttp === 401) return;
       estado.puedeAgregar = null; // /me todavía no responde: decide el servidor.
@@ -411,8 +585,42 @@
     actualizarPermisos();
   }
 
+  $("form-login").addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    const boton = $("entrar");
+    boton.disabled = true;
+    mostrarAlerta($("mensaje-login"), null);
+    try {
+      const respuesta = await llamarApi("/auth/login", {
+        method: "POST", sinAvisoDeSesion: true,
+        body: JSON.stringify({ correo: $("login-correo").value.trim(), password: $("login-clave").value }),
+      });
+      guardarToken(respuesta.access_token);
+      $("login-clave").value = "";
+      await cargarSesion();
+      cambiarCatalogo(estado.catalogo);
+    } catch (error) {
+      const texto = [401, 422].includes(error.estadoHttp)
+        ? "Correo o contraseña incorrectos." : textoDeError(error);
+      mostrarAlerta($("mensaje-login"), "danger", texto);
+    } finally {
+      boton.disabled = false;
+    }
+  });
+
+  $("salir").addEventListener("click", async () => {
+    try { await llamarApi("/auth/logout", { method: "POST", sinAvisoDeSesion: true }); } catch { /* Ya vencida. */ }
+    guardarToken(null);
+    mostrarSinSesion();
+    cambiarCatalogo(estado.catalogo);
+  });
+
+  function camposDelFormulario() {
+    return [el.code, el.name, ...estado.catalogo.campos.map((c) => $(c.id))];
+  }
+
   function limpiarErroresDeCampos() {
-    for (const campo of [el.code, el.name]) {
+    for (const campo of camposDelFormulario()) {
       campo.classList.remove("error");
       campo.removeAttribute("aria-invalid");
       $(`error-${campo.id}`).textContent = "";
@@ -420,9 +628,13 @@
   }
 
   function pintarErroresDeCampos(detalles) {
-    // El G2 manda el detalle como lista: [{ field, code, message }].
+    // El G2 manda el detalle de dos formas: {items: [{field, message}]} para
+    // los errores de cada grupo y {campos: [{campo, mensaje}]} para los de tipo.
+    const lista = Array.isArray(detalles) ? detalles
+      : [...(detalles?.items || []),
+         ...(detalles?.campos || []).map((d) => ({ field: d.campo, message: d.mensaje ?? d.message }))];
     let primero = null;
-    for (const { field: campo, message: mensaje } of Array.isArray(detalles) ? detalles : []) {
+    for (const { field: campo, message: mensaje } of lista) {
       const entrada = $(campo);
       const destino = $(`error-${campo}`);
       if (!entrada || !destino) continue;
@@ -440,13 +652,17 @@
     mostrarAlerta(el.mensajeFormulario, null);
 
     const catalogo = estado.catalogo;
-    const datos = { code: el.code.value, name: el.name.value, is_active: el.activo.checked };
+    const editando = estado.editando;
+    const datos = leerFormulario(catalogo);
     el.guardar.disabled = true;
     el.guardar.textContent = "Guardando…";
     try {
-      const creado = await llamarApi(`/${catalogo.recurso}`, { method: "POST", body: JSON.stringify(datos) });
-      el.formulario.reset();
-      mostrarAlerta(el.mensajeFormulario, "success", `${catalogo.guardado}: ${creado.code}.`);
+      const guardado = editando
+        ? await llamarApi(`/${catalogo.recurso}/${editando.id}`, { method: "PATCH", body: JSON.stringify(datos) })
+        : await llamarApi(`/${catalogo.recurso}`, { method: "POST", body: JSON.stringify(datos) });
+      terminarEdicion();
+      mostrarAlerta(el.mensajeFormulario, "success",
+        editando ? `Cambios guardados: ${guardado.code}.` : `${catalogo.guardado}: ${guardado.code}.`);
       await cargarLista();
       el.code.focus();
     } catch (error) {
@@ -458,7 +674,7 @@
       mostrarAlerta(el.mensajeFormulario, "danger", textoDeError(error));
     } finally {
       el.guardar.disabled = false;
-      el.guardar.textContent = `Guardar ${estado.catalogo.singular}`;
+      actualizarTextosFormulario();
     }
   });
 

@@ -11,7 +11,7 @@ ID_ADMIN = ADMINISTRACION.id
 ID_DOCENTE = DOCENTE.id
 HOY = datetime.now(timezone.utc).date().isoformat()  # La auditoría guarda en UTC
 
-TRANSICION = {"actor_id": ID_DOCENTE, "entidad": "assignment", "entidad_id": 58,
+TRANSICION = {"actor_id": ID_DOCENTE, "entidad": "tarea_destinatario", "entidad_id": 58,
               "estado_anterior": "in_progress", "estado_nuevo": "submitted",
               "comentario": "Entrego la planificación."}
 
@@ -24,6 +24,12 @@ def detalle(error: HTTPException) -> set[str]:
     return {d["field"] for d in error.detail["details"]["items"]}
 
 
+def transicion(auditoria, **datos):
+    # Quien llama (G3 o G5) hace el commit junto con su propio cambio.
+    auditoria.registrar_transicion(**datos)
+    auditoria.repositorio.sesion.commit()
+
+
 # ── G6-14: una acción auditada queda registrada ───────────────────────────
 
 def test_crear_un_registro_de_catalogo_queda_auditado(admin):
@@ -33,9 +39,11 @@ def test_crear_un_registro_de_catalogo_queda_auditado(admin):
 
     assert len(registros) == 1
     registro = registros[0]
-    assert (registro["actor_id"], registro["action"]) == (ID_ADMIN, "create")
-    assert (registro["entity"], registro["entity_id"]) == ("campuses", creado["id"])
-    assert registro["changes"] == {"code": "NORTE", "name": "Sede Norte", "is_active": True}
+    assert (registro["actor_id"], registro["action"]) == (ID_ADMIN, "insert")
+    # La entidad es la tabla del G1, igual que en sus triggers de auditoría.
+    assert (registro["entity"], registro["entity_id"]) == ("sede", creado["id"])
+    assert registro["changes"] == {"despues": {"code": "NORTE", "name": "Sede Norte",
+                                               "is_active": True}}
     assert registro["created_at"].startswith(HOY)
 
 
@@ -50,8 +58,8 @@ def test_modificar_un_registro_de_catalogo_queda_auditado(admin, docente):
     assert datos["total"] == 2
     ultimo = datos["data"][0]
     assert (ultimo["action"], ultimo["entity"], ultimo["entity_id"]) == (
-        "update", "areas", creado["id"])
-    assert ultimo["changes"] == {"is_active": False}
+        "update", "area", creado["id"])
+    assert ultimo["changes"] == {"antes": {"is_active": True}, "despues": {"is_active": False}}
 
 
 def test_una_operacion_rechazada_no_deja_registro(admin, docente):
@@ -67,21 +75,21 @@ def test_registrar_accion_valida_los_datos(auditoria):
 
 
 def test_la_auditoria_no_se_puede_editar_ni_borrar(auditoria):
-    registro = auditoria.registrar(actor_id=1, accion="create", entidad="areas", entidad_id=1)
-    # El repositorio no ofrece métodos para cambiar ni borrar.
+    registro = auditoria.registrar(actor_id=1, accion="insert", entidad="area", entidad_id=1)
+    # El repositorio no ofrece métodos para cambiar ni borrar. En MySQL,
+    # además, los triggers del G1 rechazan UPDATE y DELETE (ver
+    # tests/integracion/test_mysql_g1.py).
     assert not any(hasattr(auditoria.repositorio, m)
                    for m in ("modificar", "actualizar", "borrar", "eliminar"))
     # Cambiar el diccionario devuelto no altera lo guardado.
     registro["changes"]["code"] = "OTRO"
-    assert auditoria.repositorio.listar()[0].cambios == {}
-    with pytest.raises(AttributeError):
-        auditoria.repositorio.listar()[0].accion = "delete"
+    assert auditoria.consultar()[1][0]["changes"] == {}
 
 
 # ── G6-15: una transición guarda actor, fecha, estados y comentario ───────
 
 def test_transicion_registra_lo_que_pide_el_contrato(auditoria, admin):
-    auditoria.registrar_transicion(**TRANSICION)
+    transicion(auditoria, **TRANSICION)
 
     registro = consultar(admin).json()["data"][0]
 
@@ -93,12 +101,12 @@ def test_transicion_registra_lo_que_pide_el_contrato(auditoria, admin):
 
 
 def test_transicion_de_programa_usa_los_estados_de_programa(auditoria):
-    auditoria.registrar_transicion(actor_id=ID_ADMIN, entidad="program_version",
+    auditoria.registrar_transicion(actor_id=ID_ADMIN, entidad="programa_version",
                                    entidad_id=3, estado_anterior="approved",
                                    estado_nuevo="authorized")
     with pytest.raises(HTTPException) as error:
         # "closed" es de tareas, no de programas.
-        auditoria.registrar_transicion(actor_id=ID_ADMIN, entidad="program_version",
+        auditoria.registrar_transicion(actor_id=ID_ADMIN, entidad="programa_version",
                                        entidad_id=3, estado_anterior="authorized",
                                        estado_nuevo="closed")
     assert "to_state" in detalle(error.value)
@@ -108,8 +116,8 @@ def test_transicion_de_programa_usa_los_estados_de_programa(auditoria):
     ({"estado_anterior": "enviado"}, "from_state"),
     ({"estado_nuevo": "SUBMITTED"}, "to_state"),
     ({"estado_nuevo": "in_progress"}, "to_state"),
-    ({"entidad": "campuses"}, "entity"),
-    ({"entidad": ["assignment"]}, "entity"),
+    ({"entidad": "sede"}, "entity"),
+    ({"entidad": ["tarea"]}, "entity"),
     ({"comentario": None}, "comment"),
     ({"comentario": "x" * 1001}, "comment"),
     ({"actor_id": True}, "actor_id"),
@@ -119,12 +127,12 @@ def test_transicion_invalida_da_422_y_no_se_guarda(auditoria, cambio, campo):
         auditoria.registrar_transicion(**(TRANSICION | cambio))
     assert error.value.status_code == 422
     assert campo in detalle(error.value)
-    assert auditoria.repositorio.listar() == []
+    assert auditoria.consultar()[0] == 0
 
 
 def test_transicion_no_entra_por_registrar(auditoria):
     with pytest.raises(HTTPException):
-        auditoria.registrar(actor_id=1, accion="transition", entidad="assignment", entidad_id=1)
+        auditoria.registrar(actor_id=1, accion="transition", entidad="tarea", entidad_id=1)
 
 
 # ── G6-30 a G6-33: filtros por usuario, fecha, entidad y acción ───────────
@@ -133,8 +141,8 @@ def test_transicion_no_entra_por_registrar(auditoria):
 def con_registros(auditoria, admin):
     admin.post("/api/v1/campuses", json={"code": "NORTE", "name": "Sede Norte"})
     admin.post("/api/v1/areas", json={"code": "SIS", "name": "Sistemas"})
-    auditoria.registrar_transicion(**TRANSICION)
-    auditoria.registrar_transicion(**TRANSICION | {
+    transicion(auditoria, **TRANSICION)
+    transicion(auditoria, **TRANSICION | {
         "actor_id": ID_ADMIN, "estado_anterior": "submitted", "estado_nuevo": "under_review"})
     return admin
 
@@ -146,14 +154,14 @@ def test_filtra_por_usuario(con_registros):
 
 
 def test_filtra_por_entidad(con_registros):
-    datos = consultar(con_registros, "?entity=assignment").json()
-    assert {r["entity"] for r in datos["data"]} == {"assignment"}
+    datos = consultar(con_registros, "?entity=tarea_destinatario").json()
+    assert {r["entity"] for r in datos["data"]} == {"tarea_destinatario"}
     assert datos["total"] == 2
 
 
 def test_filtra_por_accion(con_registros):
-    datos = consultar(con_registros, "?action=create").json()
-    assert [r["entity"] for r in datos["data"]] == ["areas", "campuses"]
+    datos = consultar(con_registros, "?action=insert").json()
+    assert [r["entity"] for r in datos["data"]] == ["area", "sede"]
 
 
 def test_filtra_por_fecha(con_registros):

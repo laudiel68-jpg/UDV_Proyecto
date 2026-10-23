@@ -2,15 +2,48 @@
 
 import pytest
 from g2_api.utils.paginacion import PER_PAGE_MAX
+from sqlalchemy import insert, select
 
+from g6_admin import tablas
 from g6_admin.catalogos import CATALOGOS
 
 RECURSOS = list(CATALOGOS)
 VALIDO = {"code": "NORTE", "name": "Sede Norte"}
 
+# Un registro válido de cada catálogo, con los campos de su tabla del G1.
+EJEMPLOS = {
+    "academic-units": {"code": "UA-ING-N", "name": "Ingeniería - Sede Norte",
+                       "faculty_id": 1, "campus_id": 1},
+    "campuses": VALIDO,
+    "courses": {"code": "ISW-301", "name": "Programación Web", "credits": 4},
+    "periods": {"code": "2027-1", "year": 2027, "cycle": 1,
+                "start_date": "2027-01-11", "end_date": "2027-06-11"},
+    "modalities": {"code": "PRESENCIAL", "name": "Presencial"},
+    "areas": {"code": "DES-SW", "name": "Desarrollo de software"},
+}
+# Un cambio de cada catálogo y cómo debe quedar guardado.
+CAMBIOS = {r: ({"name": " Nombre   nuevo "}, {"name": "Nombre nuevo"}) for r in EJEMPLOS}
+CAMBIOS["periods"] = ({"end_date": "2027-06-30"}, {"end_date": "2027-06-30"})
+
+
+@pytest.fixture(autouse=True)
+def _sede_para_unidades(fabrica):
+    """Las unidades académicas apuntan a una sede (sede_id). Va con id 1000
+    para no chocar con las que crean las pruebas de sedes."""
+    with fabrica.begin() as sesion:
+        sesion.execute(insert(tablas.sede).values(id=1000, codigo="BASE", nombre="Sede base"))
+    EJEMPLOS["academic-units"]["campus_id"] = 1000
+
 
 def crear(cliente, recurso="campuses", datos=None):
-    return cliente.post(f"/api/v1/{recurso}", json=VALIDO if datos is None else datos)
+    return cliente.post(f"/api/v1/{recurso}",
+                        json=EJEMPLOS[recurso] if datos is None else datos)
+
+
+def sedes(cliente, consulta=""):
+    """Sedes creadas por la prueba (sin la sede base de las unidades)."""
+    datos = cliente.get(f"/api/v1/campuses{consulta}").json()
+    return [r for r in datos["data"] if r["code"] != "BASE"]
 
 
 def modificar(cliente, registro_id, datos, recurso="campuses"):
@@ -32,17 +65,21 @@ def campos_con_error(respuesta) -> set[str]:
 
 @pytest.mark.parametrize("recurso", RECURSOS)
 def test_admin_agrega_registro_y_el_docente_lo_ve(admin, docente, recurso):
-    respuesta = crear(admin, recurso, {"code": " norte-1 ", "name": "  Sede   Norte "})
+    datos = {**EJEMPLOS[recurso], "code": " norte-1 "}
+    if "name" in datos:
+        datos["name"] = "  Nombre   con espacios "
+    respuesta = crear(admin, recurso, datos)
 
     assert respuesta.status_code == 201
     creado = respuesta.json()
     assert creado["code"] == "NORTE-1"
-    assert creado["name"] == "Sede Norte"
+    if recurso != "periods":
+        assert creado["name"] == "Nombre con espacios"
     assert creado["is_active"] is True
 
-    lista = docente.get(f"/api/v1/{recurso}").json()
+    lista = docente.get(f"/api/v1/{recurso}?q=norte-1").json()
     assert lista["total"] == 1
-    assert lista["data"][0]["id"] == creado["id"]
+    assert lista["data"][0] == creado
 
 
 def test_admin_puede_agregar_registro_inactivo(admin):
@@ -51,9 +88,17 @@ def test_admin_puede_agregar_registro_inactivo(admin):
     assert respuesta.json()["is_active"] is False
 
 
-def test_se_guarda_quien_agrego_el_registro(admin, servicio):
-    crear(admin)
-    assert servicio.repositorio.listar("campuses")[0].created_by == 1
+def test_se_guarda_quien_agrego_el_registro(admin):
+    creado = crear(admin).json()
+    [registro] = admin.get("/api/v1/audit?entity=sede").json()["data"]
+    assert (registro["actor_id"], registro["entity_id"]) == (1, creado["id"])
+
+
+def test_se_guarda_en_la_tabla_del_g1(admin, sesion):
+    creado = crear(admin, "courses").json()
+    fila = sesion.execute(select(tablas.curso).where(tablas.curso.c.id == creado["id"])).one()
+    assert (fila.codigo, fila.nombre, fila.creditos, fila.activo) == (
+        "ISW-301", "Programación Web", 4, True)
 
 
 # ── G6-02 y G6-03: el docente solo consulta; el servidor lo hace cumplir ──
@@ -64,7 +109,7 @@ def test_docente_no_puede_agregar(admin, docente, recurso):
 
     assert respuesta.status_code == 403
     assert respuesta.json()["error"]["code"] == "FORBIDDEN"
-    assert admin.get(f"/api/v1/{recurso}").json()["total"] == 0
+    assert admin.get(f"/api/v1/{recurso}?q={EJEMPLOS[recurso]['code']}").json()["total"] == 0
 
 
 def test_docente_recibe_403_antes_que_errores_de_validacion(docente):
@@ -77,7 +122,7 @@ def test_docente_puede_consultar(admin, docente):
     crear(admin)
     respuesta = docente.get("/api/v1/campuses")
     assert respuesta.status_code == 200
-    assert respuesta.json()["total"] == 1
+    assert len(sedes(docente)) == 1
 
 
 @pytest.mark.parametrize("metodo", ["get", "post"])
@@ -93,14 +138,15 @@ def test_sin_sesion_responde_401(sin_sesion, metodo):
 @pytest.mark.parametrize("recurso", RECURSOS)
 def test_admin_modifica_registro_y_el_cambio_se_guarda(admin, docente, recurso):
     creado = crear(admin, recurso).json()
+    cambio, esperado = CAMBIOS[recurso]
 
-    respuesta = modificar(admin, creado["id"], {"name": " Sede  Norte 2 "}, recurso)
+    respuesta = modificar(admin, creado["id"], cambio, recurso)
 
     assert respuesta.status_code == 200
     modificado = respuesta.json()
-    assert modificado["name"] == "Sede Norte 2"
-    assert modificado["code"] == creado["code"]
-    assert docente.get(f"/api/v1/{recurso}").json()["data"][0]["name"] == "Sede Norte 2"
+    assert modificado == {**creado, **esperado}
+    lista = docente.get(f"/api/v1/{recurso}?q={creado['code']}").json()["data"]
+    assert lista == [modificado]
 
 
 def test_admin_puede_desactivar_y_cambiar_codigo(admin):
@@ -114,11 +160,11 @@ def test_admin_puede_desactivar_y_cambiar_codigo(admin):
 def test_docente_no_puede_modificar(admin, docente, recurso):
     creado = crear(admin, recurso).json()
 
-    respuesta = modificar(docente, creado["id"], {"name": "Cambio sin permiso"}, recurso)
+    respuesta = modificar(docente, creado["id"], CAMBIOS[recurso][0], recurso)
 
     assert respuesta.status_code == 403
     assert respuesta.json()["error"]["code"] == "FORBIDDEN"
-    assert admin.get(f"/api/v1/{recurso}").json()["data"][0]["name"] == VALIDO["name"]
+    assert admin.get(f"/api/v1/{recurso}?q={creado['code']}").json()["data"] == [creado]
 
 
 def test_docente_recibe_403_al_modificar_antes_que_404_o_422(docente):
@@ -157,7 +203,7 @@ def test_modificar_valida_los_campos_enviados(admin):
     respuesta = modificar(admin, creado["id"], {"code": "A", "name": None})
     assert respuesta.status_code == 422
     assert campos_con_error(respuesta) == {"code", "name"}
-    assert admin.get("/api/v1/campuses").json()["data"][0]["code"] == "NORTE"
+    assert sedes(admin)[0]["code"] == "NORTE"
 
 
 def test_modificar_a_un_codigo_ya_usado_da_409(admin):
@@ -191,10 +237,90 @@ def test_codigo_con_formato_invalido(admin, codigo):
     assert "code" in campos_con_error(respuesta)
 
 
-def test_nombre_demasiado_largo(admin):
-    respuesta = crear(admin, datos={"code": "LARGO", "name": "a" * 121})
+@pytest.mark.parametrize("recurso, largo", [("campuses", 151), ("areas", 101)])
+def test_nombre_demasiado_largo(admin, recurso, largo):
+    # El largo máximo es el de la columna nombre del G1.
+    respuesta = crear(admin, recurso, {"code": "LARGO", "name": "a" * largo})
     assert respuesta.status_code == 422
     assert "name" in campos_con_error(respuesta)
+    assert crear(admin, recurso, {"code": "LARGO", "name": "a" * (largo - 1)}).status_code == 201
+
+
+# ── Campos propios de cada tabla del G1 ────────────────────────────────────
+
+@pytest.mark.parametrize("recurso, faltan", [
+    ("academic-units", {"code", "name", "faculty_id", "campus_id"}),
+    ("courses", {"code", "name", "credits"}),
+    ("periods", {"code", "year", "cycle", "start_date", "end_date"}),
+])
+def test_campos_obligatorios_de_cada_catalogo(admin, recurso, faltan):
+    respuesta = crear(admin, recurso, {})
+    assert respuesta.status_code == 422
+    assert campos_con_error(respuesta) == faltan
+
+
+def test_unidad_con_facultad_o_sede_inexistente_da_422(admin):
+    respuesta = crear(admin, "academic-units",
+                      {**EJEMPLOS["academic-units"], "faculty_id": 99, "campus_id": 98})
+    assert respuesta.status_code == 422
+    assert campos_con_error(respuesta) == {"faculty_id", "campus_id"}
+
+
+@pytest.mark.parametrize("cambio, campo", [
+    ({"credits": 0}, "credits"), ({"credits": 31}, "credits"), ({"credits": "x"}, "credits")])
+def test_creditos_fuera_de_rango(admin, cambio, campo):
+    respuesta = crear(admin, "courses", {**EJEMPLOS["courses"], **cambio})
+    assert respuesta.status_code == 422
+    assert campo in campos_con_error(respuesta)
+
+
+@pytest.mark.parametrize("cambio, campo", [
+    ({"end_date": "2027-01-01"}, "end_date"),       # termina antes de empezar
+    ({"start_date": "11/01/2027"}, "start_date"),   # formato
+    ({"cycle": 5}, "cycle"),
+    ({"year": 1999}, "year"),
+])
+def test_periodo_invalido(admin, cambio, campo):
+    respuesta = crear(admin, "periods", {**EJEMPLOS["periods"], **cambio})
+    assert respuesta.status_code == 422
+    assert campo in campos_con_error(respuesta)
+
+
+def test_periodo_con_el_mismo_anio_y_ciclo_da_409(admin):
+    crear(admin, "periods")
+    respuesta = crear(admin, "periods", {**EJEMPLOS["periods"], "code": "OTRO"})
+    assert respuesta.status_code == 409
+    assert campos_con_error(respuesta) == {"cycle"}
+
+
+def test_cambiar_solo_la_fecha_final_revisa_contra_la_inicial(admin):
+    creado = crear(admin, "periods").json()
+    respuesta = modificar(admin, creado["id"], {"end_date": "2026-12-31"}, "periods")
+    assert respuesta.status_code == 422
+    assert campos_con_error(respuesta) == {"end_date"}
+
+
+def test_periodo_muestra_un_nombre_armado(admin):
+    assert crear(admin, "periods").json()["name"] == "Ciclo 1 de 2027"
+
+
+def test_sede_con_direccion_opcional(admin):
+    creado = crear(admin, datos={**VALIDO, "address": "  Zona 10  "}).json()
+    assert creado["address"] == "Zona 10"
+    assert modificar(admin, creado["id"], {"address": None}).json()["address"] is None
+
+
+def test_curso_eliminado_por_el_g1_no_se_lista(admin, fabrica):
+    creado = crear(admin, "courses").json()
+    with fabrica.begin() as sesion:
+        sesion.execute(tablas.curso.update().values(eliminado_en=tablas.curso.c.creado_en))
+    assert admin.get("/api/v1/courses").json()["total"] == 0
+    assert modificar(admin, creado["id"], {"credits": 3}, "courses").status_code == 404
+
+
+def test_facultades_para_elegir(docente):
+    facultades = docente.get("/api/v1/faculties").json()
+    assert [f["code"] for f in facultades] == ["FCE", "FING"]
 
 
 def test_campo_no_reconocido(admin):
@@ -240,7 +366,7 @@ def test_paginacion_con_la_forma_del_contrato(admin):
     for numero in range(25):
         crear(admin, datos={"code": f"S-{numero:02d}", "name": f"Sede {numero:02d}"})
 
-    pagina = admin.get("/api/v1/campuses?page=3&per_page=10").json()
+    pagina = admin.get("/api/v1/campuses?q=S-&page=3&per_page=10").json()
     assert set(pagina) == {"page", "per_page", "total", "data"}
     assert (pagina["page"], pagina["per_page"], pagina["total"]) == (3, 10, 25)
     assert len(pagina["data"]) == 5
@@ -252,25 +378,25 @@ def test_parametros_de_paginacion_fuera_de_rango(admin, consulta):
 
 
 def test_busqueda_ignora_mayusculas_y_tildes(admin):
-    crear(admin, "periods", {"code": "2026-S1", "name": "Primer período 2026"})
-    crear(admin, "periods", {"code": "2026-S2", "name": "Segundo período 2026"})
+    crear(admin, "areas", {"code": "ING", "name": "Ingeniería"})
+    crear(admin, "areas", {"code": "ECO", "name": "Economía"})
 
-    resultado = admin.get("/api/v1/periods?q=PRIMER periodo").json()
-    assert [r["code"] for r in resultado["data"]] == ["2026-S1"]
+    resultado = admin.get("/api/v1/areas?q=INGENIERIA").json()
+    assert [r["code"] for r in resultado["data"]] == ["ING"]
 
 
 def test_filtro_por_activos(admin):
     crear(admin, datos={"code": "ACTIVA", "name": "Activa"})
     crear(admin, datos={"code": "CERRADA", "name": "Cerrada", "is_active": False})
 
-    resultado = admin.get("/api/v1/campuses?active=false").json()
-    assert [r["code"] for r in resultado["data"]] == ["CERRADA"]
+    resultado = sedes(admin, "?active=false")
+    assert [r["code"] for r in resultado] == ["CERRADA"]
 
 
 def test_lista_ordenada_por_nombre(admin):
     for code, name in [("C", "Zacapa"), ("A", "Antigua"), ("B", "Escuintla")]:
         crear(admin, datos={"code": f"{code}{code}", "name": name})
-    nombres = [r["name"] for r in admin.get("/api/v1/campuses").json()["data"]]
+    nombres = [r["name"] for r in sedes(admin)]
     assert nombres == ["Antigua", "Escuintla", "Zacapa"]
 
 

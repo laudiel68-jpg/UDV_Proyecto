@@ -3,7 +3,11 @@
 Las rutas se prueban con el formato de error y el control de roles reales del
 G2. Lo único que se reemplaza es quién inició sesión, con la herramienta de
 FastAPI para pruebas (dependency_overrides): así cada prueba elige si actúa
-como administración, como docente o sin sesión, sin tocar la base de datos.
+como administración, como docente o sin sesión.
+
+Las tablas son las del G1 (g6_admin/tablas.py) creadas en un SQLite en
+memoria, nuevo en cada prueba. Las pruebas contra el MySQL real del G1 están
+en tests/integracion/ y corren solo si se define G6_MYSQL_URL.
 """
 
 import os
@@ -19,15 +23,18 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_carpeta}/pruebas_g6.db"
 import pytest  # noqa: E402
 from fastapi import FastAPI, HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from g2_api.database import get_db  # noqa: E402
 from g2_api.middleware.auth_middleware import obtener_usuario_actual  # noqa: E402
 from g2_api.middleware.error_handler import register_error_handlers  # noqa: E402
+from sqlalchemy import create_engine, insert  # noqa: E402
+from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
 
-from g6_admin import api  # noqa: E402
-from g6_admin.auditoria import RepositorioAuditoriaEnMemoria, ServicioAuditoria  # noqa: E402
-from g6_admin.catalogos import RepositorioEnMemoria, ServicioCatalogos  # noqa: E402
+from g6_admin import api, tablas  # noqa: E402
+from g6_admin.auditoria import RepositorioAuditoria, ServicioAuditoria  # noqa: E402
+from g6_admin.catalogos import RepositorioCatalogos, ServicioCatalogos  # noqa: E402
 from g6_admin.notificaciones import (  # noqa: E402
-    RepositorioNotificacionesEnMemoria, ServicioNotificaciones)
-
+    RepositorioNotificaciones, ServicioNotificaciones)
 
 
 def _usuario(id_: int, correo: str, rol: str) -> SimpleNamespace:
@@ -45,8 +52,7 @@ ADMINISTRACION = _usuario(1, "admin@ejemplo.test", "admin")
 DOCENTE = _usuario(2, "docente@ejemplo.test", "teacher")
 
 
-def _cliente(servicio: ServicioCatalogos, usuario: SimpleNamespace | None,
-             notificaciones: ServicioNotificaciones, *,
+def _cliente(fabrica: sessionmaker, usuario: SimpleNamespace | None, *,
              levantar_errores: bool = True) -> TestClient:
     app = FastAPI()
     register_error_handlers(app)          # formato de error del G2
@@ -57,40 +63,60 @@ def _cliente(servicio: ServicioCatalogos, usuario: SimpleNamespace | None,
             raise HTTPException(status_code=401, detail="Usuario no autenticado")
         return usuario
 
+    def sesion_de_prueba():
+        with fabrica() as sesion:
+            yield sesion
+
     app.dependency_overrides[obtener_usuario_actual] = usuario_de_prueba
-    app.dependency_overrides[api.obtener_servicio] = lambda: servicio
-    app.dependency_overrides[api.obtener_auditoria] = lambda: servicio.auditoria
-    app.dependency_overrides[api.obtener_notificaciones] = lambda: notificaciones
+    app.dependency_overrides[get_db] = sesion_de_prueba
     # levantar_errores=False deja ver el 500 que recibe el cliente.
     return TestClient(app, raise_server_exceptions=levantar_errores)
 
 
 @pytest.fixture
-def auditoria() -> ServicioAuditoria:
-    return ServicioAuditoria(RepositorioAuditoriaEnMemoria())
+def fabrica() -> sessionmaker:
+    """Base vacía con las tablas del G1 y dos facultades (las siembra el G1)."""
+    motor = create_engine("sqlite://", poolclass=StaticPool,
+                          connect_args={"check_same_thread": False})
+    tablas.metadata.create_all(motor)
+    with motor.begin() as conexion:
+        conexion.execute(insert(tablas.facultad), [
+            {"id": 1, "codigo": "FING", "nombre": "Facultad de Ingeniería"},
+            {"id": 2, "codigo": "FCE", "nombre": "Facultad de Ciencias Económicas"}])
+    return sessionmaker(bind=motor)
 
 
 @pytest.fixture
-def servicio(auditoria) -> ServicioCatalogos:
-    """Catálogos vacíos: cada prueba empieza sin registros ni auditoría."""
-    return ServicioCatalogos(RepositorioEnMemoria(), auditoria)
+def sesion(fabrica) -> Session:
+    with fabrica() as s:
+        yield s
 
 
 @pytest.fixture
-def notificaciones() -> ServicioNotificaciones:
-    return ServicioNotificaciones(RepositorioNotificacionesEnMemoria())
+def auditoria(sesion) -> ServicioAuditoria:
+    return ServicioAuditoria(RepositorioAuditoria(sesion))
 
 
 @pytest.fixture
-def admin(servicio, notificaciones) -> TestClient:
-    return _cliente(servicio, ADMINISTRACION, notificaciones)
+def servicio(sesion, auditoria) -> ServicioCatalogos:
+    return ServicioCatalogos(RepositorioCatalogos(sesion), auditoria)
 
 
 @pytest.fixture
-def docente(servicio, notificaciones) -> TestClient:
-    return _cliente(servicio, DOCENTE, notificaciones)
+def notificaciones(sesion) -> ServicioNotificaciones:
+    return ServicioNotificaciones(RepositorioNotificaciones(sesion))
 
 
 @pytest.fixture
-def sin_sesion(servicio, notificaciones) -> TestClient:
-    return _cliente(servicio, None, notificaciones)
+def admin(fabrica) -> TestClient:
+    return _cliente(fabrica, ADMINISTRACION)
+
+
+@pytest.fixture
+def docente(fabrica) -> TestClient:
+    return _cliente(fabrica, DOCENTE)
+
+
+@pytest.fixture
+def sin_sesion(fabrica) -> TestClient:
+    return _cliente(fabrica, None)

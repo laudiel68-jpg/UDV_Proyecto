@@ -22,6 +22,10 @@ def mis_notificaciones(cliente, consulta=""):
     return cliente.get(f"/api/v1/notifications{consulta}").json()
 
 
+def cuantas(notificaciones, usuario_id) -> int:
+    return notificaciones.listar(usuario_id)[0]
+
+
 def detalle(error: HTTPException) -> set[str]:
     return {d["field"] for d in error.detail["details"]["items"]}
 
@@ -47,6 +51,7 @@ def test_cada_evento_notifica_a_sus_destinatarios(notificaciones, admin, docente
         if usuario_id in destinatarios:
             assert [n["event"] for n in recibidas] == [nombre]
             assert texto in recibidas[0]["message"]
+            assert recibidas[0]["title"] == EVENTOS[nombre].titulo
             assert recibidas[0]["is_read"] is False
         else:
             assert recibidas == []
@@ -64,18 +69,18 @@ def test_mismo_evento_dos_veces_no_duplica(notificaciones):
     datos_evento = evento("assignment.approved", [ID_DOCENTE, ID_ADMIN])
     assert len(notificaciones.procesar_evento(datos_evento)) == 2
     assert notificaciones.procesar_evento(datos_evento) == []
-    assert len(notificaciones.listar(ID_DOCENTE)) == 1
+    assert cuantas(notificaciones, ID_DOCENTE) == 1
 
 
 def test_destinatario_repetido_recibe_una_sola(notificaciones):
     notificaciones.procesar_evento(evento("task.published", [ID_DOCENTE, ID_DOCENTE]))
-    assert len(notificaciones.listar(ID_DOCENTE)) == 1
+    assert cuantas(notificaciones, ID_DOCENTE) == 1
 
 
 def test_eventos_distintos_si_se_guardan(notificaciones):
     notificaciones.procesar_evento(evento("task.published", evento_id="t-1"))
     notificaciones.procesar_evento(evento("task.published", evento_id="t-2"))
-    assert len(notificaciones.listar(ID_DOCENTE)) == 2
+    assert cuantas(notificaciones, ID_DOCENTE) == 2
 
 
 # ── G6-18: un evento inválido no deja nada a medias ───────────────────────
@@ -97,7 +102,14 @@ def test_evento_invalido_da_422_y_no_guarda_nada(notificaciones, cambio, campo):
         notificaciones.procesar_evento(datos_evento)
     assert error.value.status_code == 422
     assert campo in detalle(error.value)
-    assert notificaciones.listar(ID_DOCENTE) == notificaciones.listar(ID_ADMIN) == []
+    assert cuantas(notificaciones, ID_DOCENTE) == cuantas(notificaciones, ID_ADMIN) == 0
+
+
+def test_mismo_id_para_otro_evento_da_409(notificaciones):
+    notificaciones.procesar_evento(evento("task.published", evento_id="x-1"))
+    with pytest.raises(HTTPException) as error:
+        notificaciones.procesar_evento(evento("task.cancelled", evento_id="x-1"))
+    assert error.value.status_code == 409
 
 
 def test_evento_que_no_es_objeto(notificaciones):

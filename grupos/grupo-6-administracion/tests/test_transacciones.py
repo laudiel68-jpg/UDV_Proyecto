@@ -7,93 +7,99 @@ sin su auditoría: o se guardan los dos, o ninguno.
 
 import pytest
 from conftest import ADMINISTRACION, _cliente
+from sqlalchemy import func, select
 
-from g6_admin.auditoria import RepositorioAuditoriaEnMemoria, ServicioAuditoria
-from g6_admin.catalogos import RepositorioEnMemoria, ServicioCatalogos
+from g6_admin import api, tablas
+from g6_admin.auditoria import RepositorioAuditoria, ServicioAuditoria
+from g6_admin.catalogos import RepositorioCatalogos, ServicioCatalogos
+
+NUEVO = {"code": "CEN", "name": "Central"}
 
 
-class AuditoriaQueFalla(RepositorioAuditoriaEnMemoria):
+class AuditoriaQueFalla(RepositorioAuditoria):
     """Guarda normal hasta que se le pide fallar."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.fallar = False
+    fallar = False
 
     def agregar(self, **datos):
-        if self.fallar:
+        if AuditoriaQueFalla.fallar:
             raise ConnectionError("la base no responde")
         return super().agregar(**datos)
 
 
-@pytest.fixture
-def repo_auditoria() -> AuditoriaQueFalla:
-    return AuditoriaQueFalla()
+@pytest.fixture(autouse=True)
+def _reiniciar():
+    AuditoriaQueFalla.fallar = False
 
 
 @pytest.fixture
-def servicio_fragil(repo_auditoria) -> ServicioCatalogos:
-    return ServicioCatalogos(RepositorioEnMemoria(), ServicioAuditoria(repo_auditoria))
+def cliente(fabrica):
+    cliente = _cliente(fabrica, ADMINISTRACION, levantar_errores=False)
+
+    def servicio_fragil(db: api.Sesion) -> ServicioCatalogos:
+        return ServicioCatalogos(RepositorioCatalogos(db),
+                                 ServicioAuditoria(AuditoriaQueFalla(db)))
+
+    cliente.app.dependency_overrides[api.obtener_servicio] = servicio_fragil
+    return cliente
 
 
-@pytest.fixture
-def cliente(servicio_fragil, notificaciones):
-    return _cliente(servicio_fragil, ADMINISTRACION, notificaciones,
-                    levantar_errores=False)
+def contar(sesion, tabla) -> int:
+    return sesion.execute(select(func.count()).select_from(tabla)).scalar_one()
 
 
-def test_alta_sin_auditoria_no_deja_el_registro(cliente, servicio_fragil, repo_auditoria):
-    repo_auditoria.fallar = True
-    respuesta = cliente.post("/api/v1/campuses", json={"code": "CEN", "name": "Central"})
+def test_alta_sin_auditoria_no_deja_el_registro(cliente, sesion):
+    AuditoriaQueFalla.fallar = True
+    respuesta = cliente.post("/api/v1/campuses", json=NUEVO)
 
     assert respuesta.status_code == 500
-    assert servicio_fragil.listar("campuses") == []
-    assert repo_auditoria.listar() == []
+    assert contar(sesion, tablas.sede) == 0
+    assert contar(sesion, tablas.auditoria) == 0
 
 
-def test_alta_fallida_no_gasta_el_id(cliente, servicio_fragil, repo_auditoria):
-    repo_auditoria.fallar = True
-    cliente.post("/api/v1/campuses", json={"code": "CEN", "name": "Central"})
-    repo_auditoria.fallar = False
+def test_alta_fallida_no_deja_ocupado_el_codigo(cliente):
+    AuditoriaQueFalla.fallar = True
+    cliente.post("/api/v1/campuses", json=NUEVO)
+    AuditoriaQueFalla.fallar = False
 
-    respuesta = cliente.post("/api/v1/campuses", json={"code": "CEN", "name": "Central"})
-    # El código ya se puede volver a usar y el registro sale con el primer id.
+    respuesta = cliente.post("/api/v1/campuses", json=NUEVO)
     assert respuesta.status_code == 201
-    assert respuesta.json()["id"] == 1
 
 
-def test_cambio_sin_auditoria_deja_el_registro_como_estaba(cliente, servicio_fragil,
-                                                           repo_auditoria):
-    creado = cliente.post("/api/v1/courses", json={"code": "PW", "name": "Programación Web"})
+def test_cambio_sin_auditoria_deja_el_registro_como_estaba(cliente, sesion):
+    creado = cliente.post("/api/v1/courses",
+                          json={"code": "PW", "name": "Programación Web", "credits": 4})
     registro_id = creado.json()["id"]
 
-    repo_auditoria.fallar = True
+    AuditoriaQueFalla.fallar = True
     respuesta = cliente.patch(f"/api/v1/courses/{registro_id}",
                               json={"code": "PW2", "name": "Otro nombre", "is_active": False})
 
     assert respuesta.status_code == 500
-    [registro] = servicio_fragil.listar("courses")
-    assert (registro["code"], registro["name"], registro["is_active"]) == (
-        "PW", "Programación Web", True)
+    fila = sesion.execute(select(tablas.curso)).one()
+    assert (fila.codigo, fila.nombre, fila.activo) == ("PW", "Programación Web", True)
     # Solo queda la auditoría del alta, no la del cambio que falló.
-    assert [r.accion for r in repo_auditoria.listar()] == ["create"]
+    acciones = sesion.execute(select(tablas.auditoria.c.accion)).scalars().all()
+    assert acciones == ["insert"]
 
 
-def test_el_500_no_muestra_el_error_interno(cliente, repo_auditoria):
-    repo_auditoria.fallar = True
-    respuesta = cliente.post("/api/v1/periods", json={"code": "2026-2", "name": "Segundo 2026"})
+def test_el_500_no_muestra_el_error_interno(cliente):
+    AuditoriaQueFalla.fallar = True
+    respuesta = cliente.post("/api/v1/modalities", json={"code": "VIR", "name": "Virtual"})
 
     assert respuesta.status_code == 500
     assert "la base no responde" not in respuesta.text
     assert respuesta.json()["error"]["code"] == "INTERNAL_ERROR"
 
 
-def test_un_rechazo_tampoco_deja_nada(servicio_fragil, repo_auditoria):
+def test_un_rechazo_tampoco_deja_nada(cliente, sesion):
     """Un 409 a mitad de la operación tampoco deja cambios ni auditoría."""
-    servicio_fragil.crear("areas", {"code": "ING", "name": "Ingeniería"}, ADMINISTRACION.id)
-    servicio_fragil.crear("areas", {"code": "SAL", "name": "Salud"}, ADMINISTRACION.id)
+    cliente.post("/api/v1/areas", json={"code": "ING", "name": "Ingeniería"})
+    segunda = cliente.post("/api/v1/areas", json={"code": "SAL", "name": "Salud"}).json()
 
-    with pytest.raises(Exception):
-        servicio_fragil.modificar("areas", 2, {"code": "ING"}, ADMINISTRACION.id)
+    respuesta = cliente.patch(f"/api/v1/areas/{segunda['id']}",
+                              json={"code": "ING", "name": "Otro"})
 
-    assert {r["code"] for r in servicio_fragil.listar("areas")} == {"ING", "SAL"}
-    assert len(repo_auditoria.listar()) == 2
+    assert respuesta.status_code == 409
+    assert set(sesion.execute(select(tablas.area.c.codigo)).scalars()) == {"ING", "SAL"}
+    assert contar(sesion, tablas.auditoria) == 2
