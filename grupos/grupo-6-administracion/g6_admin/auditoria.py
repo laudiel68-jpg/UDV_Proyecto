@@ -49,6 +49,20 @@ def _iso(valor: Any) -> str | None:
     return valor.replace(microsecond=0).isoformat() + "Z"
 
 
+# Claves que nunca se muestran aunque algún módulo las guarde en el detalle (G6-20).
+_CLAVES_SECRETAS = ("contrasena", "password", "hash", "token", "secret", "clave")
+
+
+def _sin_secretos(valor: Any) -> Any:
+    if isinstance(valor, dict):
+        return {k: "***" if any(s in str(k).lower() for s in _CLAVES_SECRETAS)
+                and not isinstance(v, bool) else _sin_secretos(v)
+                for k, v in valor.items()}
+    if isinstance(valor, list):
+        return [_sin_secretos(v) for v in valor]
+    return valor
+
+
 def como_dict(fila: Any) -> dict[str, Any]:
     """Fila de la tabla auditoria del G1 → JSON de la API.
 
@@ -61,6 +75,7 @@ def como_dict(fila: Any) -> dict[str, Any]:
         detalle = {"texto": fila.detalle}
     if not isinstance(detalle, dict):
         detalle = {"valor": detalle}
+    detalle = _sin_secretos(detalle)
     registro_id = fila.registro_id
     return {"id": fila.id, "actor_id": fila.actor_id, "action": fila.accion,
             "entity": fila.tabla,

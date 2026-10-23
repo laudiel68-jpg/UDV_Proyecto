@@ -8,6 +8,8 @@ SQLite temporal con `metadata.create_all`.
 Si el G1 cambia una columna que aparece aquí, hay que cambiarla también aquí.
 """
 
+from datetime import datetime, timezone
+
 from sqlalchemy import (BigInteger, Boolean, Column, Date, DateTime, Integer,
                         MetaData, SmallInteger, String, Table, Text)
 
@@ -17,9 +19,17 @@ metadata = MetaData()
 _ID_LARGO = BigInteger().with_variant(Integer, "sqlite")
 
 
+def _utc() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _creado() -> Column:
+    # En MySQL lo pone la base (DEFAULT CURRENT_TIMESTAMP); en SQLite, Python. Todo en UTC.
+    return Column("creado_en", DateTime, default=_utc)
+
+
 def _fechas() -> list[Column]:
-    # El valor lo pone el G6 al insertar, en UTC, igual en MySQL y en SQLite.
-    return [Column("creado_en", DateTime), Column("actualizado_en", DateTime)]
+    return [_creado(), Column("actualizado_en", DateTime, default=_utc)]
 
 
 # ── Catálogos académicos ────────────────────────────────────────────────────
@@ -74,7 +84,7 @@ periodo = Table(
     Column("fecha_inicio", Date, nullable=False),
     Column("fecha_fin", Date, nullable=False),
     Column("activo", Boolean, nullable=False, default=True),
-    Column("creado_en", DateTime),  # periodo no tiene actualizado_en
+    _creado(),  # periodo no tiene actualizado_en
 )
 
 modalidad = Table(
@@ -106,7 +116,7 @@ auditoria = Table(
     Column("actor_id", Integer),
     Column("ip_origen", String(45)),
     Column("detalle", Text),  # JSON
-    Column("creado_en", DateTime),
+    _creado(),
 )
 
 # ── Eventos y notificaciones ────────────────────────────────────────────────
@@ -121,7 +131,7 @@ evento = Table(
     Column("programa_version_id", Integer),
     Column("actor_id", Integer),
     Column("payload", Text),  # JSON
-    Column("creado_en", DateTime),
+    _creado(),
     Column("procesado_en", DateTime),
 )
 
@@ -136,7 +146,7 @@ notificacion = Table(
     Column("programa_version_id", Integer),
     Column("evento_id", _ID_LARGO),
     Column("leida_en", DateTime),
-    Column("creado_en", DateTime),
+    _creado(),
 )
 
 # ── Lo que se lee de otros grupos para saber a quién avisar (solo lectura) ──
