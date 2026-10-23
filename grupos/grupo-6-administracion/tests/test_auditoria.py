@@ -7,8 +7,8 @@ from fastapi import HTTPException
 
 from conftest import ADMINISTRACION, DOCENTE
 
-ID_ADMIN = ADMINISTRACION["id"]
-ID_DOCENTE = DOCENTE["id"]
+ID_ADMIN = ADMINISTRACION.id
+ID_DOCENTE = DOCENTE.id
 HOY = datetime.now(timezone.utc).date().isoformat()  # La auditoría guarda en UTC
 
 TRANSICION = {"actor_id": ID_DOCENTE, "entidad": "assignment", "entidad_id": 58,

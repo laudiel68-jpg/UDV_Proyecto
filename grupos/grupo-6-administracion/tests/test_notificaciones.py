@@ -6,8 +6,8 @@ from fastapi import HTTPException
 from conftest import ADMINISTRACION, DOCENTE
 from g6_admin.notificaciones import EVENTOS
 
-ID_ADMIN = ADMINISTRACION["id"]
-ID_DOCENTE = DOCENTE["id"]
+ID_ADMIN = ADMINISTRACION.id
+ID_DOCENTE = DOCENTE.id
 
 DATOS = {"task_title": "Sílabo", "due_date": "2026-11-15", "comment": "Falta la bibliografía.",
          "program_name": "Programación Web"}

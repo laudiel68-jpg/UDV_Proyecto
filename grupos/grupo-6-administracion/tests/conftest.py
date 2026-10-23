@@ -8,6 +8,7 @@ como administración, como docente o sin sesión, sin tocar la base de datos.
 
 import os
 import tempfile
+from types import SimpleNamespace
 
 # g2_api lee su configuración al importarse: valores solo para pruebas, igual
 # que en el conftest del G2. La base es un SQLite temporal, nunca MySQL.
@@ -27,12 +28,24 @@ from g6_admin.catalogos import RepositorioEnMemoria, ServicioCatalogos  # noqa: 
 from g6_admin.notificaciones import (  # noqa: E402
     RepositorioNotificacionesEnMemoria, ServicioNotificaciones)
 
+
+
+def _usuario(id_: int, correo: str, rol: str) -> SimpleNamespace:
+    """Usuario ficticio con la forma del modelo `Usuario` del G2.
+
+    Desde el 22-oct `obtener_usuario_actual` devuelve el registro de la base
+    (no un diccionario) y `requerir_rol` lee `usuario.roles[i].codigo`.
+    """
+    return SimpleNamespace(id=id_, correo=correo, activo=True,
+                           roles=[SimpleNamespace(codigo=rol)])
+
+
 # Usuarios ficticios con los códigos de rol de la tabla `rol` del G1.
-ADMINISTRACION = {"id": 1, "correo": "admin@ejemplo.test", "roles": ["admin"], "activo": True}
-DOCENTE = {"id": 2, "correo": "docente@ejemplo.test", "roles": ["teacher"], "activo": True}
+ADMINISTRACION = _usuario(1, "admin@ejemplo.test", "admin")
+DOCENTE = _usuario(2, "docente@ejemplo.test", "teacher")
 
 
-def _cliente(servicio: ServicioCatalogos, usuario: dict | None,
+def _cliente(servicio: ServicioCatalogos, usuario: SimpleNamespace | None,
              notificaciones: ServicioNotificaciones) -> TestClient:
     app = FastAPI()
     register_error_handlers(app)          # formato de error del G2
