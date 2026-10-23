@@ -8,9 +8,12 @@ middleware del G2. Los errores salen con el formato común del G2
 (g2_api.middleware.error_handler); aquí no se reimplementa nada del G2.
 """
 
+import copy
 import re
 import threading
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -69,14 +72,31 @@ class RepositorioEnMemoria:
     """Guarda los registros en memoria mientras se conectan las tablas del G1.
 
     Los datos se pierden al reiniciar el servidor. Para pasar a MySQL se crea
-    un repositorio con los mismos tres métodos (listar, agregar y modificar) que use las
-    tablas del G1, y el resto del código no cambia.
+    un repositorio con los mismos métodos (listar, agregar, modificar y
+    transaccion) que use las tablas del G1, y el resto del código no cambia.
     """
 
     def __init__(self) -> None:
         self._registros: dict[str, list[Registro]] = {r: [] for r in CATALOGOS}
         self._siguiente_id = 1
-        self._candado = threading.Lock()
+        # Reentrante: transaccion() lo toma y adentro se llama a agregar o modificar.
+        self._candado = threading.RLock()
+
+    @contextmanager
+    def transaccion(self) -> Iterator[None]:
+        """Todo lo que se haga adentro queda completo o no queda nada (G6-18).
+
+        Si algo falla (por ejemplo, no se pudo registrar la auditoría), los
+        registros vuelven a como estaban antes. En MySQL es un
+        BEGIN/COMMIT/ROLLBACK de la sesión de SQLAlchemy.
+        """
+        with self._candado:
+            respaldo = copy.deepcopy(self._registros), self._siguiente_id
+            try:
+                yield
+            except BaseException:
+                self._registros, self._siguiente_id = respaldo
+                raise
 
     def listar(self, recurso: str) -> list[Registro]:
         with self._candado:
@@ -220,34 +240,38 @@ class ServicioCatalogos:
         """Agrega un registro. El permiso ya lo revisó el middleware del G2."""
         catalogo = CATALOGOS[recurso]
         limpio = validar_registro(datos)
-        try:
-            registro = self.repositorio.agregar(recurso, autor_id=autor_id, **limpio)
-        except CodigoDuplicado:
-            raise api_error(
-                409, ErrorCode.CONFLICT,
-                f"El código {limpio['code']} ya existe en {catalogo.nombre}.",
-                [_error_de_campo("code", "DUPLICATE", "Este código ya está en uso.")],
-            ) from None
-        self._auditar(autor_id, "create", recurso, registro.id, limpio)
-        return registro.como_dict()
+        # El registro y su auditoría se guardan juntos o no se guarda ninguno (G6-18).
+        with self.repositorio.transaccion():
+            try:
+                registro = self.repositorio.agregar(recurso, autor_id=autor_id, **limpio)
+            except CodigoDuplicado:
+                raise api_error(
+                    409, ErrorCode.CONFLICT,
+                    f"El código {limpio['code']} ya existe en {catalogo.nombre}.",
+                    [_error_de_campo("code", "DUPLICATE", "Este código ya está en uso.")],
+                ) from None
+            self._auditar(autor_id, "create", recurso, registro.id, limpio)
+            return registro.como_dict()
 
     def modificar(self, recurso: str, registro_id: int, datos: dict[str, Any],
                   autor_id: int | None = None) -> dict[str, Any]:
         """Cambia los campos enviados. El permiso ya lo revisó el middleware del G2."""
         catalogo = CATALOGOS[recurso]
         cambios = validar_registro(datos, parcial=True)
-        try:
-            registro = self.repositorio.modificar(recurso, registro_id, cambios)
-        except RegistroNoEncontrado:
-            raise api_error(
-                404, ErrorCode.NOT_FOUND,
-                f"No existe el registro {registro_id} en {catalogo.nombre}.",
-            ) from None
-        except CodigoDuplicado:
-            raise api_error(
-                409, ErrorCode.CONFLICT,
-                f"El código {cambios['code']} ya existe en {catalogo.nombre}.",
-                [_error_de_campo("code", "DUPLICATE", "Este código ya está en uso.")],
-            ) from None
-        self._auditar(autor_id, "update", recurso, registro.id, cambios)
-        return registro.como_dict()
+        # El cambio y su auditoría se guardan juntos o no se guarda ninguno (G6-18).
+        with self.repositorio.transaccion():
+            try:
+                registro = self.repositorio.modificar(recurso, registro_id, cambios)
+            except RegistroNoEncontrado:
+                raise api_error(
+                    404, ErrorCode.NOT_FOUND,
+                    f"No existe el registro {registro_id} en {catalogo.nombre}.",
+                ) from None
+            except CodigoDuplicado:
+                raise api_error(
+                    409, ErrorCode.CONFLICT,
+                    f"El código {cambios['code']} ya existe en {catalogo.nombre}.",
+                    [_error_de_campo("code", "DUPLICATE", "Este código ya está en uso.")],
+                ) from None
+            self._auditar(autor_id, "update", recurso, registro.id, cambios)
+            return registro.como_dict()

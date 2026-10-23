@@ -46,7 +46,8 @@ DOCENTE = _usuario(2, "docente@ejemplo.test", "teacher")
 
 
 def _cliente(servicio: ServicioCatalogos, usuario: SimpleNamespace | None,
-             notificaciones: ServicioNotificaciones) -> TestClient:
+             notificaciones: ServicioNotificaciones, *,
+             levantar_errores: bool = True) -> TestClient:
     app = FastAPI()
     register_error_handlers(app)          # formato de error del G2
     app.include_router(api.router)        # igual que lo monta main.py
@@ -60,7 +61,8 @@ def _cliente(servicio: ServicioCatalogos, usuario: SimpleNamespace | None,
     app.dependency_overrides[api.obtener_servicio] = lambda: servicio
     app.dependency_overrides[api.obtener_auditoria] = lambda: servicio.auditoria
     app.dependency_overrides[api.obtener_notificaciones] = lambda: notificaciones
-    return TestClient(app)
+    # levantar_errores=False deja ver el 500 que recibe el cliente.
+    return TestClient(app, raise_server_exceptions=levantar_errores)
 
 
 @pytest.fixture
