@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from .auth import Actor
+from .auth import Actor, has_role
 from .database import set_database_actor
 from .domain import editable, next_status
 from .errors import ApiError
@@ -91,6 +91,41 @@ def _program_row(session: Session, program_id: int):
 def _section(content):
     """Deja el contenido con el formato que espera la API para cada sección."""
     return {"contenido": content}
+
+
+def _validate_evaluations(content: list) -> None:
+    """Valida las actividades antes de borrar o insertar filas de evaluación."""
+    for index, item in enumerate(content):
+        prefix = f"evaluacion[{index}]"
+        if not isinstance(item, dict):
+            raise ApiError(
+                422,
+                "VALIDATION_ERROR",
+                "Cada actividad de evaluación debe ser un objeto.",
+                {prefix: "Se requiere un objeto."},
+            )
+
+        details = {}
+        if not isinstance(item.get("nombre"), str) or not item["nombre"].strip():
+            details[f"{prefix}.nombre"] = "Campo obligatorio."
+        raw_weight = item.get("ponderacion")
+        if raw_weight is None or isinstance(raw_weight, bool):
+            details[f"{prefix}.ponderacion"] = "Campo obligatorio y numérico."
+        else:
+            try:
+                weight = Decimal(str(raw_weight))
+            except (InvalidOperation, ValueError):
+                details[f"{prefix}.ponderacion"] = "Debe ser numérica."
+            else:
+                if not weight.is_finite():
+                    details[f"{prefix}.ponderacion"] = "Debe ser un número finito."
+        if details:
+            raise ApiError(
+                422,
+                "VALIDATION_ERROR",
+                "La actividad de evaluación está incompleta o es inválida.",
+                details,
+            )
 
 
 # Carga y guardado de las secciones del formulario.
@@ -199,7 +234,8 @@ def _load_sections(session: Session, version: dict) -> dict:
     ))
     people = _one(
         session,
-        """SELECT CONCAT_WS(' ', d.nombres, d.apellidos) AS docente,
+        """SELECT pv.docente_responsable_id,
+                  CONCAT_WS(' ', d.nombres, d.apellidos) AS docente,
                   CONCAT_WS(' ', r.nombres, r.apellidos) AS revisor,
                   CONCAT_WS(' ', a.nombres, a.apellidos) AS autoridad
            FROM programa_version pv
@@ -249,6 +285,7 @@ def _save_section(
     section: str,
     content: dict | list,
     actor_id: int | None = None,
+    responsible_context: dict | None = None,
 ):
     """Guarda los datos de una sección en las tablas correspondientes de G1.
 
@@ -296,11 +333,26 @@ def _save_section(
             {"descripcion": "G5:" + json.dumps(data, ensure_ascii=False), "id": version_id},
         )
     elif section == "responsables":
-        if actor_id is None:
-            raise ApiError(401, "UNAUTHENTICATED", "No se pudo identificar al docente autenticado.")
+        raw_responsible_id = content.get("docente_responsable_id")
+        if raw_responsible_id is None:
+            return
+        if responsible_context is None:
+            raise ApiError(
+                422,
+                "VALIDATION_ERROR",
+                "No se pudo validar el docente responsable para este programa.",
+                {"docente_responsable_id": "Falta el contexto del curso, período y sede."},
+            )
+        responsible_id = _validate_responsible_teacher(
+            session,
+            raw_responsible_id,
+            responsible_context["curso_id"],
+            responsible_context["periodo_id"],
+            responsible_context["sede_id"],
+        )
         session.execute(
-            text("UPDATE programa_version SET docente_responsable_id = :actor_id WHERE id = :id"),
-            {"actor_id": actor_id, "id": version_id},
+            text("UPDATE programa_version SET docente_responsable_id = :responsible_id WHERE id = :id"),
+            {"responsible_id": responsible_id, "id": version_id},
         )
     elif section == "competencias":
         if isinstance(content, dict):
@@ -363,6 +415,7 @@ def _save_section(
                 if percent > 0:
                     entries.append({"nombre": key, "ponderacion": percent})
             content = entries
+        _validate_evaluations(content)
         session.execute(text("DELETE FROM programa_evaluacion WHERE programa_version_id = :id"), {"id": version_id})
         for index, item in enumerate(content, 1):
             session.execute(
@@ -498,6 +551,7 @@ def list_programs(
     sede_id: int | None = None,
     estado: str | None = None,
     version: int | None = None,
+    docente_responsable_id: int | None = None,
 ):
     """Lista programas/versiones paginados y aplica los filtros solicitados."""
     conditions = []
@@ -512,6 +566,9 @@ def list_programs(
         if value is not None:
             conditions.append(f"{column} = :{parameter}")
             params[parameter] = value
+    if docente_responsable_id is not None:
+        conditions.append("pv.docente_responsable_id = :docente_responsable_id")
+        params["docente_responsable_id"] = docente_responsable_id
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
     from_clause = """
         FROM programa_curso pc
@@ -530,7 +587,17 @@ def list_programs(
         f"""SELECT pc.id, pc.curso_id, pc.sede_id, pc.modalidad_id, pc.activo,
                    c.codigo, c.nombre AS asignatura, s.nombre AS sede,
                    m.nombre AS modalidad, pv.id AS programa_version_id,
-                   pv.numero_version, p.codigo AS periodo, pv.estado_codigo AS estado
+                   pv.numero_version, p.codigo AS periodo, pv.estado_codigo AS estado,
+                   (SELECT MAX(v.numero_version) FROM programa_version v
+                    WHERE v.programa_curso_id = pc.id AND v.estado_codigo = 'authorized')
+                    AS version_actual,
+                   (SELECT p_vigente.codigo
+                    FROM programa_version v_vigente
+                    JOIN periodo p_vigente ON p_vigente.id = v_vigente.periodo_id
+                    WHERE v_vigente.programa_curso_id = pc.id
+                      AND v_vigente.estado_codigo = 'authorized'
+                    ORDER BY v_vigente.numero_version DESC, v_vigente.periodo_id DESC
+                    LIMIT 1) AS periodo_vigente
             {from_clause}{where_clause}
             ORDER BY pc.id DESC, pv.periodo_id DESC, pv.numero_version DESC
             LIMIT :limit OFFSET :offset""",
@@ -628,6 +695,32 @@ def _validate_sections(sections: dict):
             raise ApiError(422, "VALIDATION_ERROR", "El contenido de sección no es válido.", {name: "contenido debe ser un objeto o una lista."})
 
 
+def _require_manager_for_responsible_change(
+    actor: Actor,
+    version: dict,
+    content: dict,
+) -> None:
+    """Solo un gestor puede transferir la asignación de una versión a otro docente."""
+    raw_id = content.get("docente_responsable_id")
+    if raw_id is None:
+        return
+    try:
+        if isinstance(raw_id, bool) or (
+            isinstance(raw_id, float) and not raw_id.is_integer()
+        ):
+            return
+        requested_id = int(raw_id)
+    except (TypeError, ValueError):
+        return
+    current_id = version.get("docente_responsable_id")
+    if requested_id != current_id and not has_role(actor, "manager"):
+        raise ApiError(
+            403,
+            "FORBIDDEN",
+            "Solo un gestor de programas puede cambiar al docente responsable.",
+        )
+
+
 def update_version(session: Session, actor: Actor, version_id: int, body: dict, section: str | None = None):
     """Guarda cambios en una versión editable y registra quién los hizo.
 
@@ -637,6 +730,18 @@ def update_version(session: Session, actor: Actor, version_id: int, body: dict, 
     with session.begin():
         set_database_actor(session, actor)
         row = _require_version(session, version_id, lock=True)
+        is_manager = has_role(actor, "manager")
+        is_author = has_role(actor, "author")
+        is_assigned_teacher = (
+            "teacher" in actor.roles
+            and actor.id == row.get("docente_responsable_id")
+        )
+        if not is_manager and not (is_author and is_assigned_teacher):
+            raise ApiError(
+                403,
+                "FORBIDDEN",
+                "Solo un gestor de programas o el docente responsable puede editarla.",
+            )
         editable(row["estado_codigo"])
         if section:
             if section not in {
@@ -647,7 +752,16 @@ def update_version(session: Session, actor: Actor, version_id: int, body: dict, 
             content = body.get("contenido")
             if not isinstance(content, (dict, list)):
                 raise ApiError(422, "VALIDATION_ERROR", "El contenido debe ser un objeto o una lista.", {"contenido": "Formato no válido."})
-            _save_section(session, version_id, section, content, actor.id)
+            if section == "responsables" and isinstance(content, dict):
+                _require_manager_for_responsible_change(actor, row, content)
+            _save_section(
+                session,
+                version_id,
+                section,
+                content,
+                actor.id,
+                row,
+            )
         else:
             protected = {"id", "programa_id", "programa_curso_id", "numero_version", "estado", "version_origen_id"}
             if protected.intersection(body):
@@ -655,7 +769,20 @@ def update_version(session: Session, actor: Actor, version_id: int, body: dict, 
             if "secciones" in body:
                 _validate_sections(body["secciones"])
                 for name, value in body["secciones"].items():
-                    _save_section(session, version_id, name, value["contenido"], actor.id)
+                    if name == "responsables":
+                        _require_manager_for_responsible_change(
+                            actor,
+                            row,
+                            value["contenido"],
+                        )
+                    _save_section(
+                        session,
+                        version_id,
+                        name,
+                        value["contenido"],
+                        actor.id,
+                        row,
+                    )
             if "resumen_cambios" in body:
                 session.execute(
                     text("UPDATE programa_version SET resumen_cambios = :value WHERE id = :id"),
@@ -701,6 +828,7 @@ def transition(session: Session, actor: Actor, version_id: int, action: str, com
         new_status = next_status(action, current)
 
         if action == "submit":
+            _require_teacher_is_responsible(actor, row.get("docente_responsable_id"))
             _validate_for_submit(session, version_id, row)
         if action == "return" and not (comment and comment.strip()):
             raise ApiError(422, "VALIDATION_ERROR", "La devolución requiere una observación.", {"comentario": "Este campo es obligatorio."})
@@ -812,6 +940,67 @@ def _assignment_origin_id(body: dict) -> int | None:
     return assignment_id
 
 
+def _validate_responsible_teacher(
+    session: Session,
+    raw_id,
+    course_id: int,
+    period_id: int,
+    campus_id: int,
+) -> int:
+    """Requiere que el responsable esté asignado al mismo curso, período y sede en G1."""
+    try:
+        if isinstance(raw_id, bool) or (
+            isinstance(raw_id, float) and not raw_id.is_integer()
+        ):
+            raise ValueError
+        teacher_id = int(raw_id)
+    except (TypeError, ValueError):
+        teacher_id = 0
+    if teacher_id <= 0:
+        raise ApiError(
+            422,
+            "VALIDATION_ERROR",
+            "El docente responsable debe ser un identificador válido.",
+            {"docente_responsable_id": "Usa un entero positivo."},
+        )
+
+    assigned = _one(
+        session,
+        """SELECT dc.usuario_id FROM docente_curso dc
+           JOIN usuario u ON u.id = dc.usuario_id
+           WHERE dc.usuario_id = :teacher_id AND dc.curso_id = :course_id
+             AND dc.periodo_id = :period_id AND dc.sede_id = :campus_id
+             AND dc.activo = 1 AND u.activo = 1 AND u.eliminado_en IS NULL""",
+        {
+            "teacher_id": teacher_id,
+            "course_id": course_id,
+            "period_id": period_id,
+            "campus_id": campus_id,
+        },
+    )
+    if assigned is None:
+        raise ApiError(
+            422,
+            "VALIDATION_ERROR",
+            "El docente no está asignado al curso, período y sede seleccionados.",
+            {"docente_responsable_id": "Debe existir una asignación activa en docente_curso de G1."},
+        )
+    return teacher_id
+
+
+def _require_teacher_is_responsible(actor: Actor, responsible_id: int | None) -> None:
+    if (
+        "teacher" in actor.roles
+        and "coordinator" not in actor.roles
+        and actor.id != responsible_id
+    ):
+        raise ApiError(
+            403,
+            "FORBIDDEN",
+            "Un docente solo puede trabajar en versiones donde figura como responsable.",
+        )
+
+
 # Creación de programas y versiones, y registro del PDF generado.
 def create_program(session: Session, actor: Actor, body: dict):
     """Guarda un programa nuevo y crea su primera versión en borrador."""
@@ -827,6 +1016,50 @@ def create_program(session: Session, actor: Actor, body: dict):
     assignment_id = _assignment_origin_id(body)
     with session.begin():
         set_database_actor(session, actor)
+        responsible_id = body.get("docente_responsable_id")
+        sections = body.get("secciones")
+        responsible_section = sections.get("responsables") if isinstance(sections, dict) else None
+        responsible_content = (
+            responsible_section.get("contenido")
+            if isinstance(responsible_section, dict)
+            else None
+        )
+        section_responsible_id = (
+            responsible_content.get("docente_responsable_id")
+            if isinstance(responsible_content, dict)
+            else None
+        )
+        try:
+            top_level_id = int(responsible_id) if responsible_id is not None else None
+            section_id = int(section_responsible_id) if section_responsible_id is not None else None
+        except (TypeError, ValueError):
+            top_level_id = section_id = None
+        if (
+            isinstance(responsible_id, bool)
+            or isinstance(section_responsible_id, bool)
+            or top_level_id is not None
+            and section_id is not None
+            and top_level_id != section_id
+        ):
+            raise ApiError(
+                422,
+                "VALIDATION_ERROR",
+                "El docente responsable debe ser el mismo en el encabezado y la sección.",
+                {"docente_responsable_id": "Los identificadores no coinciden."},
+            )
+        if responsible_id is None:
+            responsible_id = section_responsible_id
+        if responsible_id is None and "teacher" in actor.roles:
+            responsible_id = actor.id
+        if responsible_id is not None:
+            responsible_id = _validate_responsible_teacher(
+                session,
+                responsible_id,
+                body["curso_id"],
+                body["periodo_id"],
+                body["sede_id"],
+            )
+            _require_teacher_is_responsible(actor, responsible_id)
         context = _one(
             session,
             """SELECT pc.id, pc.curso_id FROM programa_curso pc
@@ -853,29 +1086,35 @@ def create_program(session: Session, actor: Actor, body: dict):
                 },
             )
             program_id = result.lastrowid
-        latest = session.execute(
+        existing_period_version = session.execute(
             text("""SELECT MAX(numero_version) FROM programa_version
                     WHERE programa_curso_id = :id AND periodo_id = :periodo_id"""),
             {"id": program_id, "periodo_id": body["periodo_id"]},
         ).scalar_one()
-        if latest is not None:
+        if existing_period_version is not None:
             raise ApiError(
                 409,
                 "CONFLICT",
                 "El programa ya tiene una versión para este período; usa la ruta de versiones.",
             )
+        next_version = session.execute(
+            text("""SELECT COALESCE(MAX(numero_version), 0) + 1
+                    FROM programa_version WHERE programa_curso_id = :id"""),
+            {"id": program_id},
+        ).scalar_one()
         result = session.execute(
             text("""INSERT INTO programa_version
                     (programa_curso_id, numero_version, periodo_id, estado_codigo,
                      nombre, descripcion, programa_academico,
                      departamento, nivel, pensum, horas_clase_semanal,
                      docente_responsable_id, tarea_destinatario_origen_id, creado_por)
-                    VALUES (:program_id, 1, :period_id, 'draft',
+                    VALUES (:program_id, :number, :period_id, 'draft',
                             :name, :description, :program,
                             :department, :level, :pensum, :hours, :teacher,
                             :assignment_id, :actor_id)"""),
             {
                 "program_id": program_id,
+                "number": next_version,
                 "period_id": body["periodo_id"],
                 "name": body.get("nombre") or body.get("asignatura") or "Programa de curso",
                 "description": body.get("descripcion"),
@@ -884,7 +1123,7 @@ def create_program(session: Session, actor: Actor, body: dict):
                 "level": body.get("nivel"),
                 "pensum": body.get("pensum"),
                 "hours": body.get("horas_clase_semanal"),
-                "teacher": actor.id,
+                "teacher": responsible_id,
                 "assignment_id": assignment_id,
                 "actor_id": actor.id,
             },
@@ -893,7 +1132,18 @@ def create_program(session: Session, actor: Actor, body: dict):
         if body.get("secciones"):
             _validate_sections(body["secciones"])
             for name, value in body["secciones"].items():
-                _save_section(session, version_id, name, value["contenido"], actor.id)
+                _save_section(
+                    session,
+                    version_id,
+                    name,
+                    value["contenido"],
+                    actor.id,
+                    {
+                        "curso_id": body["curso_id"],
+                        "periodo_id": body["periodo_id"],
+                        "sede_id": body["sede_id"],
+                    },
+                )
         created = _serialize_version(session, _require_version(session, version_id))
     return {"programa": _program_row(session, program_id), "version": created}
 
@@ -919,8 +1169,8 @@ def create_version(session: Session, actor: Actor, program_id: int, body: dict):
         )
         latest = session.execute(
             text("""SELECT MAX(numero_version) FROM programa_version
-                    WHERE programa_curso_id = :program_id AND periodo_id = :period_id"""),
-            {"program_id": program_id, "period_id": period_id},
+                    WHERE programa_curso_id = :program_id"""),
+            {"program_id": program_id},
         ).scalar_one()
         if source is None:
             raise ApiError(409, "CONFLICT", "Solo se puede clonar una versión autorizada.")
@@ -930,11 +1180,12 @@ def create_version(session: Session, actor: Actor, program_id: int, body: dict):
                      version_origen_id, nombre, descripcion, resumen_cambios,
                      unidad_academica_id, programa_academico, departamento, nivel,
                      area_id, pensum, horas_clase_semanal,
-                     tarea_destinatario_origen_id, creado_por)
+                     docente_responsable_id, tarea_destinatario_origen_id, creado_por)
                     VALUES (:program_id, :number, :period_id, 'draft',
                             :source_id, :name, :description, :summary,
                             :unit_id, :academic_program, :department, :level,
-                            :area_id, :pensum, :hours, :assignment_id, :actor_id)"""),
+                            :area_id, :pensum, :hours, :responsible_id,
+                            :assignment_id, :actor_id)"""),
             {
                 "program_id": program_id,
                 "number": (latest or 0) + 1,
@@ -950,6 +1201,7 @@ def create_version(session: Session, actor: Actor, program_id: int, body: dict):
                 "area_id": (source or {}).get("area_id"),
                 "pensum": (source or {}).get("pensum"),
                 "hours": (source or {}).get("horas_clase_semanal"),
+                "responsible_id": (source or {}).get("docente_responsable_id", actor.id),
                 "assignment_id": (
                     assignment_id if "tarea_destinatario_origen_id" in body
                     else (source or {}).get("tarea_destinatario_origen_id")

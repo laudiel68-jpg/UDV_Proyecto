@@ -71,12 +71,51 @@ class ProgramFlowTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 409)
 
     def test_roles_are_taken_from_authenticated_principal(self):
-        """Usa el rol de la sesión para decidir si el usuario tiene permiso."""
+        """Usa los códigos de G1 y sus permisos para cada acción."""
         teacher = Actor(id=12, name="Docente", roles=frozenset({"teacher"}))
         require_role(teacher, "author")
         with self.assertRaises(ApiError) as caught:
-            require_role(teacher, "authority")
+            require_role(teacher, "reviewer")
         self.assertEqual(caught.exception.status, 403)
+
+        coordinator = Actor(id=13, name="Coordinación", roles=frozenset({"coordinator"}))
+        require_role(coordinator, "author")
+        require_role(coordinator, "manager")
+        require_role(coordinator, "reviewer")
+        require_role(coordinator, "coordinator")
+
+        reviewer = Actor(id=14, name="Revisor", roles=frozenset({"reviewer"}))
+        require_role(reviewer, "manager")
+        require_role(reviewer, "reviewer")
+        with self.assertRaises(ApiError) as caught:
+            require_role(reviewer, "author")
+        self.assertEqual(caught.exception.status, 403)
+
+        admin = Actor(id=1, name="Administradora", roles=frozenset({"admin"}))
+        require_role(admin, "manager")
+        with self.assertRaises(ApiError) as caught:
+            require_role(admin, "author")
+        self.assertEqual(caught.exception.status, 403)
+
+        authority = Actor(id=15, name="Dirección", roles=frozenset({"authority"}))
+        require_role(authority, "authority")
+        for code in ("admin", "coordinator", "teacher", "reviewer", "authority", "auditor"):
+            actor = Actor(id=17, name="Lector", roles=frozenset({code}))
+            require_role(actor, "reader")
+
+        for alias in (
+            "docente",
+            "autoridad",
+            "decanatura",
+            "decano",
+            "elaborador",
+            "revisor",
+            "coordinador-academico",
+        ):
+            actor = Actor(id=16, name="Alias", roles=frozenset({alias}))
+            with self.subTest(alias=alias), self.assertRaises(ApiError) as caught:
+                require_role(actor, "reader")
+            self.assertEqual(caught.exception.status, 403)
 
 
 if __name__ == "__main__":

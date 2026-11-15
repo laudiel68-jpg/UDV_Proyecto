@@ -21,6 +21,7 @@ grupo-5-programas-pdf/
 │   ├── pdf.py              # Adaptador del generador de PDF
 │   ├── pdf_service.py      # Construcción del documento con ReportLab
 │   ├── repository.py       # Consultas y operaciones sobre el esquema G1
+│   ├── schemas.py          # Esquemas Pydantic para Swagger y validación
 │   └── router.py           # Rutas bajo /api/v1
 ├── frontend/
 │   ├── Programa.html
@@ -45,8 +46,8 @@ grupo-5-programas-pdf/
 
 - Python 3.10 o posterior.
 - Las dependencias se fijan en `requirements.txt`: FastAPI 0.142.1,
-  Uvicorn 0.54.0, SQLAlchemy 2.1.1, PyMySQL 1.1.1, cryptography 44.0.2,
-  ReportLab 4.5.1 y pytest 9.1.1.
+  Pydantic 2.14.0, Uvicorn 0.54.0, SQLAlchemy 2.1.1, PyMySQL 1.1.1,
+  cryptography 44.0.2, ReportLab 4.5.1 y pytest 9.1.1.
 - Una base MySQL compatible con el esquema compartido de G1, incluyendo sus
   catálogos, tablas, vistas y procedimientos usados por el repositorio. La
   autorización utiliza `sp_autorizar_version`.
@@ -83,6 +84,12 @@ este archivo. G5 aislado lee la variable del entorno y no carga `.env`
 automáticamente; en la aplicación compartida, G2 carga `.env` y Docker
 Compose también aplica su configuración de entorno.
 
+`.env.example` es solo una plantilla y no debe contener valores reales.
+Mantenga las credenciales locales en `.env` (ignorado por Git) o inyéctelas
+al proceso desde el entorno de ejecución. G5 no firma ni valida JWT por su
+cuenta: esa responsabilidad y `SECRET_KEY` pertenecen a G2. No incluya esa
+clave en el frontend ni en archivos compartidos.
+
 Registre el router desde la aplicación compartida:
 
 ```python
@@ -111,12 +118,35 @@ registrar_errores(app)
 
 ## Frontend y pruebas
 
-El frontend está en `frontend/`. Usa la API del mismo origen, muestra el
-formulario de acceso de G2 y carga el programa indicado por
-`?program_id=<id>`, por ejemplo `Programa.html?program_id=1`. El token se
-mantiene en `sessionStorage` durante la pestaña y se envía como Bearer en las
-solicitudes protegidas. Los roles del selector se limitan a los que devuelve
-G2; el backend sigue siendo quien autoriza cada operación.
+El frontend está en `frontend/` y se publica en `/app/g5/Programa.html`. El
+inicio de sesión pertenece a G2 y se realiza desde el portal común de `/app/`
+mediante `POST /api/v1/auth/login`; G5 no implementa un login propio.
+Reutiliza el token `sessionStorage["udv_token"]` y lo envía en el encabezado
+`Authorization: Bearer` a la API del mismo origen. La pantalla carga el
+listado de programas y permite abrir uno con el botón **Abrir**, por lo que
+`program_id` en la URL es opcional.
+
+La lista muestra todos los programas a coordinación y revisión, y solo las
+versiones asignadas al docente autenticado. El docente responsable elabora,
+edita y envía su propia versión; coordinación también puede elaborar y enviar.
+Coordinación y revisión pueden revisar, devolver y aprobar; `authority`
+autoriza. `admin`, coordinación y revisión pueden abrir versiones nuevas.
+El backend valida los códigos oficiales de G1 en cada operación.
+La pantalla usa los estilos comunes de `/udv-styles/udv.css`.
+
+Los cuerpos de escritura están descritos con modelos Pydantic para que
+Swagger muestre los campos de creación, versión, encabezado y transiciones.
+Al crear un programa o actualizar `responsables`, puede enviarse
+`docente_responsable_id`; G5 verifica que ese usuario tenga una asignación
+activa en `docente_curso` para el mismo curso, período y sede. Si no se indica
+un responsable al crear, coordinación no queda asignada automáticamente como
+docente. Un usuario con rol `teacher` solo se asigna a sí mismo si tiene esa
+asignación activa en G1.
+La edición de una versión se limita a su autor asignado o a `coordinator`.
+Las actividades de evaluación aceptan el formato del formulario o una lista
+de objetos con `nombre`, `ponderacion` y `semana`; las listas incompletas
+responden 422 sin borrar las filas existentes. El número de versión se asigna
+por programa y respeta la unicidad de G1 aunque cambie el período.
 
 Al crear una versión desde un trabajo de G3, el enlace puede incluir
 `&tarea_destinatario_origen_id=<id-de-asignacion>`. Si no se proporciona en
@@ -128,10 +158,11 @@ Ejecute las pruebas disponibles desde la raíz:
 python -m pytest -q
 ```
 
-Las pruebas unitarias cubren transiciones y permisos, el manejador de errores,
-los filtros y OpenAPI, la validación del identificador de asignación, y la
-selección/cierre de sesiones y auditoría con mocks. No conectan a MySQL ni
-reemplazan una prueba de integración con la aplicación host.
+Las pruebas cubren transiciones y permisos, y hacen solicitudes HTTP a rutas
+protegidas con encabezados Bearer y roles oficiales en el formato de usuario
+de G2. El proveedor de identidad se sustituye por fixtures, así que no validan
+un JWT real ni conectan a MySQL. Deben complementarse con pruebas de
+integración en la aplicación host y una base MySQL local de prueba.
 
 ## Documentación
 

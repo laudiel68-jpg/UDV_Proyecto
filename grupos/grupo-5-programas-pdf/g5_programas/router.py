@@ -9,23 +9,23 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
-from .auth import Actor, authenticated_actor, require_role
+from .auth import Actor, authenticated_actor, has_role, require_role
 from .database import get_session
 from .domain import ACTOR_ROLES
-from .errors import ApiError
 from . import repository
+from .schemas import (
+    EncabezadoVersion,
+    EvaluacionSeccion,
+    ProgramaNuevo,
+    ResponsablesSeccion,
+    SeccionActualizacion,
+    TransicionVersion,
+    VersionNueva,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["Programas de curso"])
 DbSession = Annotated[Session, Depends(get_session)]
 CurrentActor = Annotated[Actor, Depends(authenticated_actor)]
-
-
-# Revisión del formato de los datos que llegan a la API.
-def _body_object(body):
-    """Confirma que el cuerpo de la solicitud sea un objeto JSON."""
-    if not isinstance(body, dict):
-        raise ApiError(422, "VALIDATION_ERROR", "El cuerpo debe ser un objeto JSON.", {"body": "Se requiere un objeto."})
-    return body
 
 
 # Rutas para consultar y crear programas y versiones.
@@ -50,6 +50,12 @@ def list_course_programs(
     version: Annotated[int | None, Query(ge=1)] = None,
 ):
     """Muestra programas paginados y permite filtrar por curso y versión."""
+    require_role(actor, "reader")
+    responsible_id = (
+        actor.id
+        if "teacher" in actor.roles and not has_role(actor, "manager")
+        else None
+    )
     return repository.list_programs(
         session,
         page,
@@ -59,60 +65,110 @@ def list_course_programs(
         sede_id=sede_id,
         estado=estado,
         version=version,
+        docente_responsable_id=responsible_id,
     )
 
 
 @router.post("/course-programs", status_code=201)
-def post_course_program(body: dict, session: DbSession, actor: CurrentActor):
-    """Crea un programa con su primer borrador; lo puede hacer un autor."""
+def post_course_program(body: ProgramaNuevo, session: DbSession, actor: CurrentActor):
+    """Crea un programa con su primer borrador; requiere permiso de elaboración."""
     require_role(actor, "author")
-    return repository.create_program(session, actor, _body_object(body))
+    return repository.create_program(session, actor, body.model_dump(exclude_unset=True))
 
 
 @router.get("/course-programs/{program_id}")
 def course_program(program_id: int, session: DbSession, actor: CurrentActor):
     """Muestra los datos del programa y sus versiones anteriores."""
+    require_role(actor, "reader")
     return repository.get_program(session, program_id)
 
 
 @router.post("/course-programs/{program_id}/versions", status_code=201)
-def post_version(program_id: int, body: dict, session: DbSession, actor: CurrentActor):
-    """Abre otra versión copiando una autorizada; lo puede hacer coordinación."""
-    require_role(actor, "coordinator")
-    return repository.create_version(session, actor, program_id, _body_object(body))
+def post_version(program_id: int, body: VersionNueva, session: DbSession, actor: CurrentActor):
+    """Abre otra versión copiando una autorizada; requiere gestión de programas."""
+    require_role(actor, "manager")
+    return repository.create_version(session, actor, program_id, body.model_dump(exclude_unset=True))
 
 
 @router.get("/program-versions/{version_id}")
 def read_version(version_id: int, session: DbSession, actor: CurrentActor):
     """Muestra los datos de una versión y todo su contenido."""
+    require_role(actor, "reader")
     return repository.get_version(session, version_id)
 
 
 @router.put("/program-versions/{version_id}")
-def put_version(version_id: int, body: dict, session: DbSession, actor: CurrentActor):
-    """Guarda cambios en una versión que todavía se puede editar."""
-    require_role(actor, "author")
+def put_version(version_id: int, body: EncabezadoVersion, session: DbSession, actor: CurrentActor):
+    """Guarda cambios de encabezado de una versión que el actor puede editar."""
+    require_role(actor, "reader")
     return {"ok": True, "version": repository.update_version(
-        session, actor, version_id, _body_object(body)
+        session, actor, version_id, body.model_dump(exclude_unset=True)
+    )}
+
+
+@router.put("/program-versions/{version_id}/sections/evaluacion")
+def put_evaluation_section(
+    version_id: int,
+    body: EvaluacionSeccion,
+    session: DbSession,
+    actor: CurrentActor,
+):
+    """Guarda la evaluación; acepta el formato de formulario y listas de actividades."""
+    require_role(actor, "reader")
+    return {"ok": True, "version": repository.update_version(
+        session,
+        actor,
+        version_id,
+        body.model_dump(exclude_unset=True),
+        "evaluacion",
+    )}
+
+
+@router.put("/program-versions/{version_id}/sections/responsables")
+def put_responsables_section(
+    version_id: int,
+    body: ResponsablesSeccion,
+    session: DbSession,
+    actor: CurrentActor,
+):
+    """Actualiza responsables y valida la asignación del docente en G1."""
+    require_role(actor, "reader")
+    return {"ok": True, "version": repository.update_version(
+        session,
+        actor,
+        version_id,
+        body.model_dump(exclude_unset=True),
+        "responsables",
     )}
 
 
 @router.put("/program-versions/{version_id}/sections/{section}")
-def put_section(version_id: int, section: str, body: dict, session: DbSession, actor: CurrentActor):
+def put_section(
+    version_id: int,
+    section: str,
+    body: SeccionActualizacion,
+    session: DbSession,
+    actor: CurrentActor,
+):
     """Guarda una sección sin tocar las demás."""
-    require_role(actor, "author")
+    require_role(actor, "reader")
     return {"ok": True, "version": repository.update_version(
-        session, actor, version_id, _body_object(body), section
+        session, actor, version_id, body.model_dump(exclude_unset=True), section
     )}
 
 
 # Acciones para enviar, revisar, devolver, aprobar y autorizar una versión.
 def _transition(action: str):
     """Prepara una ruta para la acción indicada y su rol correspondiente."""
-    def endpoint(version_id: int, session: DbSession, actor: CurrentActor, body: dict | None = None):
+    def endpoint(
+        version_id: int,
+        session: DbSession,
+        actor: CurrentActor,
+        body: TransicionVersion | None = None,
+    ):
         """Realiza la acción y devuelve la versión con su estado actualizado."""
         require_role(actor, ACTOR_ROLES[action])
-        payload = _body_object(body or {})
+        payload = body.model_dump(exclude_unset=True) if body else {}
         comment = payload.get("comentario", payload.get("observacion"))
         version = repository.transition(session, actor, version_id, action, comment)
         return {"ok": True, "version": version}
@@ -132,12 +188,14 @@ router.add_api_route("/program-versions/{version_id}/authorize", _transition("au
 @router.get("/program-versions/{version_id}/changes")
 def version_changes(version_id: int, session: DbSession, actor: CurrentActor):
     """Muestra las diferencias con la versión anterior del mismo período."""
+    require_role(actor, "reader")
     return repository.get_changes(session, version_id)
 
 
 @router.get("/program-versions/{version_id}/pdf")
 def version_pdf(version_id: int, session: DbSession, actor: CurrentActor):
     """Genera y descarga el PDF de una versión autorizada."""
+    require_role(actor, "reader")
     content, digest, program, version = repository.generate_pdf_data(session, version_id, actor)
     repository.record_pdf(session, actor, version_id, content, digest)
     filename = f"programa-{program['id']}-version-{version['numero_version']}.pdf"
