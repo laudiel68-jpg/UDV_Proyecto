@@ -48,11 +48,11 @@ Transiciones válidas de una versión de programa:
 
 | Estado actual | Acción | Estado nuevo | Actor |
 |---|---|---|---|
-| draft | submit | submitted | Gestor de programa (`coordinator` o `reviewer`) |
-| submitted | review | under_review | Revisor |
-| under_review | return | returned | Revisor |
-| returned | submit | submitted | Gestor de programa (`coordinator` o `reviewer`) |
-| under_review | approve | approved | Revisor |
+| draft | submit | submitted | Elaborador (docente responsable) |
+| submitted | review | under_review | Revisor o Coordinación |
+| under_review | return | returned | Revisor o Coordinación |
+| returned | submit | submitted | Elaborador (docente responsable) |
+| under_review | approve | approved | Revisor o Coordinación |
 | approved | authorize | authorized | `authority` |
 | authorized | (otra versión se autoriza) | superseded | Sistema |
 
@@ -67,11 +67,11 @@ integración con el mecanismo compartido de eventos.
 - El programa lógico y sus versiones son entidades distintas.
 - Editar solo está permitido en `draft` o `returned`; enviar congela la
   edición hasta una devolución.
-- La autorización usa exclusivamente códigos oficiales de rol de G1. Su seed
-  concede `programs.manage` a `admin`, `coordinator` y `reviewer`; `reviewer`
-  revisa y `authority` autoriza. Los gestores pueden crear y editar borradores;
-  además, el docente responsable puede editar su versión. Los demás usuarios
-  reciben 403 al intentar editar.
+- La autorización usa exclusivamente códigos oficiales de rol de G1. El docente
+  responsable elabora, edita y envía únicamente su propia versión; Coordinación
+  también puede elaborar y enviar. Coordinación y `reviewer` pueden revisar,
+  devolver y aprobar; `authority` autoriza. El backend valida estos códigos de
+  rol directamente, sin depender de permisos derivados de G1.
 - Solo UNA versión autorizada y vigente por curso/sede/período.
 - Una versión autorizada es INMUTABLE: los cambios van en un borrador nuevo
   (clonación), jamás editando la vigente.
@@ -82,9 +82,9 @@ integración con el mecanismo compartido de eventos.
   para el mismo curso, período y sede. Crear un programa desde coordinación
   sin indicar docente no asigna automáticamente a coordinación como docente.
   Solo los gestores pueden cambiar al docente responsable de una versión.
-- La gestión de borradores y creación de versiones corresponde a los roles
-  con `programs.manage` en G1: `admin`, `coordinator` y `reviewer`. Enviar a
-  revisión sigue limitado a `coordinator` y `reviewer`.
+- Abrir versiones nuevas corresponde a `admin`, `coordinator` y `reviewer`.
+  El docente puede crear el primer programa y borrador, siempre asignándose
+  como responsable y con una asignación activa en G1.
 - Guardar una sección no sobrescribe las demás; las filas mantienen su orden.
 - La suma de ponderaciones de evaluación se valida (100%) cuando ese sea el
   esquema.
@@ -115,4 +115,4 @@ integración con el mecanismo compartido de eventos.
 |---|---|---|---|
 | 2026-09-26 | Versión inicial | — | PM |
 | 2026-09-28 | Jerarquía de fuentes; prefijo `/api/v1`; tabla de endpoints completada con las rutas del .docx; **nuevo** `POST /program-versions/{id}/review` (el estado `under_review` no tenía acción); tabla de transiciones de programa; evento requerido; reglas de versionado del .docx que faltaban; checklist con pruebas y OpenAPI | PM | PM |
-| 2026-11-12 | Se precisa que la edición requiere ser autor asignado o `coordinator`; se documentan los cuerpos de evaluación en Swagger y la numeración única de versiones por programa | QA de integración | PM |
+| 2026-11-13 | Docente elabora y envía; coordinación y revisor aprueban; dirección autoriza | Decisión del PM con el ingeniero | PM |

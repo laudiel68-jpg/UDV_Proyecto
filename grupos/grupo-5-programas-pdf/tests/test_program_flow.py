@@ -73,22 +73,23 @@ class ProgramFlowTests(unittest.TestCase):
     def test_roles_are_taken_from_authenticated_principal(self):
         """Usa los códigos de G1 y sus permisos para cada acción."""
         teacher = Actor(id=12, name="Docente", roles=frozenset({"teacher"}))
+        require_role(teacher, "author")
         with self.assertRaises(ApiError) as caught:
-            require_role(teacher, "author")
+            require_role(teacher, "reviewer")
         self.assertEqual(caught.exception.status, 403)
 
         coordinator = Actor(id=13, name="Coordinación", roles=frozenset({"coordinator"}))
         require_role(coordinator, "author")
         require_role(coordinator, "manager")
+        require_role(coordinator, "reviewer")
         require_role(coordinator, "coordinator")
-        with self.assertRaises(ApiError) as caught:
-            require_role(coordinator, "reviewer")
-        self.assertEqual(caught.exception.status, 403)
 
         reviewer = Actor(id=14, name="Revisor", roles=frozenset({"reviewer"}))
-        require_role(reviewer, "author")
         require_role(reviewer, "manager")
         require_role(reviewer, "reviewer")
+        with self.assertRaises(ApiError) as caught:
+            require_role(reviewer, "author")
+        self.assertEqual(caught.exception.status, 403)
 
         admin = Actor(id=1, name="Administradora", roles=frozenset({"admin"}))
         require_role(admin, "manager")

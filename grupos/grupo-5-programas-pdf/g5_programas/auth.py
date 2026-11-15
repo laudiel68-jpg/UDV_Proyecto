@@ -84,9 +84,9 @@ async def authenticated_actor(
 ROLE_CODES = {
     "reader": frozenset({"admin", "coordinator", "teacher", "reviewer", "authority", "auditor"}),
     "manager": frozenset({"admin", "coordinator", "reviewer"}),
-    "author": frozenset({"coordinator", "reviewer"}),
+    "author": frozenset({"teacher", "coordinator"}),
     "coordinator": frozenset({"coordinator"}),
-    "reviewer": frozenset({"reviewer"}),
+    "reviewer": frozenset({"reviewer", "coordinator"}),
     "authority": frozenset({"authority"}),
 }
 

@@ -55,18 +55,17 @@
 
           <div class="header-actions">
             <div class="role-selector">
-              <label for="program-select">Programa de curso</label>
-              <select id="program-select" class="role">
-                <option value="">Selecciona un programa</option>
-              </select>
-            </div>
-            <div class="role-selector">
-              <label for="role">Rol autorizado</label>
+              <label for="role">Rol activo</label>
               <select id="role" class="role"></select>
             </div>
             <a class="btn-udv btn-udv-outline" href="/app/">Volver al portal</a>
           </div>
         </header>
+
+        <section id="program-picker" class="panel">
+          <h3>Programas disponibles</h3>
+          <ul id="program-list" class="program-list" aria-live="polite"></ul>
+        </section>
 
         <!-- VISTA PREVIA DEL DOCUMENTO QUE SE IMPRIME O GUARDA COMO PDF -->
         <article id="pdf-document" class="pdf-document" hidden></article>
@@ -82,13 +81,13 @@
               <input
                 type="text"
                 id="instructor"
-                placeholder="Se carga desde el usuario responsable"
+                placeholder="Se completa automáticamente"
                 readonly
               />
             </div>
 
             <div class="field">
-              <label for="instructor-id">ID del docente responsable en G1</label>
+              <label for="instructor-id">ID del docente</label>
 
               <input type="number" id="instructor-id" min="1" step="1" disabled />
               <small>Debe tener asignación activa al mismo curso, período y sede.</small>
@@ -149,13 +148,13 @@
                 <div class="field">
                   <label for="course-code"> Código </label>
 
-                  <input type="text" id="course-code" value="PW-001" />
+                  <input type="text" id="course-code" placeholder="PW-001" />
                 </div>
 
                 <div class="field">
                   <label for="course"> Asignatura </label>
 
-                  <input type="text" id="course" value="Programación Web" />
+                  <input type="text" id="course" placeholder="Programación Web" />
                 </div>
 
                 <div class="field">
@@ -164,20 +163,20 @@
                   <input
                     type="text"
                     id="program-name"
-                    value="Ingeniería en Sistemas"
+                    placeholder="Ingeniería en Sistemas"
                   />
                 </div>
 
                 <div class="field">
                   <label for="department"> Departamento </label>
 
-                  <input type="text" id="department" value="Tecnología" />
+                  <input type="text" id="department" placeholder="Tecnología" />
                 </div>
 
                 <div class="field">
                   <label for="faculty"> Facultad </label>
 
-                  <input type="text" id="faculty" value="Ingeniería" />
+                  <input type="text" id="faculty" placeholder="Ingeniería" />
                 </div>
 
                 <div class="field">
@@ -195,13 +194,13 @@
                 <div class="field">
                   <label for="term"> Ciclo </label>
 
-                  <input type="text" id="term" value="Segundo ciclo" />
+                  <input type="text" id="term" placeholder="Segundo ciclo" />
                 </div>
 
                 <div class="field">
                   <label for="year"> Año </label>
 
-                  <input type="number" id="year" value="2026" />
+                  <input type="number" id="year" placeholder="2026" />
                 </div>
 
                 <div class="field">
@@ -231,19 +230,19 @@
                 <div class="field">
                   <label for="credits"> Créditos </label>
 
-                  <input type="number" id="credits" value="4" />
+                  <input type="number" id="credits" placeholder="4" />
                 </div>
 
                 <div class="field">
                   <label for="hours"> Horas </label>
 
-                  <input type="number" id="hours" value="64" />
+                  <input type="number" id="hours" placeholder="64" />
                 </div>
 
                 <div class="field">
                   <label for="campus"> Sede </label>
 
-                  <input type="text" id="campus" value="Campus Central" />
+                  <input type="text" id="campus" placeholder="Campus Central" />
                 </div>
               </div>
             </div>
@@ -267,15 +266,15 @@
                   <tbody>
                     <tr>
                       <td>
-                        <input type="text" value="Programación II" />
+                        <input type="text" placeholder="Programación II" />
                       </td>
 
                       <td>
-                        <input type="text" value="PRG-002" />
+                        <input type="text" placeholder="PRG-002" />
                       </td>
 
                       <td>
-                        <input type="number" value="1" />
+                        <input type="number" placeholder="1" />
                       </td>
                     </tr>
                   </tbody>
@@ -291,9 +290,10 @@
                 <div class="field full">
                   <label for="description-text"> Descripción del curso </label>
 
-                  <textarea id="description-text">
-Curso orientado al desarrollo de aplicaciones web utilizando tecnologías modernas, APIs REST y herramientas para la construcción de sistemas web.</textarea
-                  >
+                  <textarea
+                    id="description-text"
+                    placeholder="Curso orientado al desarrollo de aplicaciones web utilizando tecnologías modernas, APIs REST y herramientas para la construcción de sistemas web."
+                  ></textarea>
                 </div>
               </div>
             </div>
@@ -306,9 +306,10 @@ Curso orientado al desarrollo de aplicaciones web utilizando tecnologías modern
                 <div class="field full">
                   <label for="general-competency"> Competencia general </label>
 
-                  <textarea id="general-competency">
-Desarrolla aplicaciones web funcionales utilizando buenas prácticas de programación.</textarea
-                  >
+                  <textarea
+                    id="general-competency"
+                    placeholder="Desarrolla aplicaciones web funcionales utilizando buenas prácticas de programación."
+                  ></textarea>
                 </div>
 
                 <div class="field full">
@@ -316,9 +317,10 @@ Desarrolla aplicaciones web funcionales utilizando buenas prácticas de programa
                     Competencias específicas
                   </label>
 
-                  <textarea id="specific-competencies">
-Diseña APIs REST, utiliza bases de datos y desarrolla interfaces web.</textarea
-                  >
+                  <textarea
+                    id="specific-competencies"
+                    placeholder="Diseña APIs REST, utiliza bases de datos y desarrolla interfaces web."
+                  ></textarea>
                 </div>
               </div>
             </div>
@@ -331,7 +333,7 @@ Diseña APIs REST, utiliza bases de datos y desarrolla interfaces web.</textarea
                 <div class="field">
                   <label for="profile-code"> Código </label>
 
-                  <input type="text" id="profile-code" value="PE-01" />
+                  <input type="text" id="profile-code" placeholder="PE-01" />
                 </div>
 
                 <div class="field">
@@ -340,7 +342,7 @@ Diseña APIs REST, utiliza bases de datos y desarrolla interfaces web.</textarea
                   <input
                     type="text"
                     id="profile-contribution"
-                    value="Desarrollo de soluciones tecnológicas"
+                    placeholder="Desarrollo de soluciones tecnológicas"
                   />
                 </div>
               </div>
@@ -355,9 +357,10 @@ Diseña APIs REST, utiliza bases de datos y desarrolla interfaces web.</textarea
                   Metodología de enseñanza
                 </label>
 
-                <textarea id="methodology-text">
-Clases prácticas, ejercicios, proyectos y actividades de desarrollo de aplicaciones web.</textarea
-                >
+                <textarea
+                  id="methodology-text"
+                  placeholder="Clases prácticas, ejercicios, proyectos y actividades de desarrollo de aplicaciones web."
+                ></textarea>
               </div>
             </div>
 
@@ -368,7 +371,7 @@ Clases prácticas, ejercicios, proyectos y actividades de desarrollo de aplicaci
               <div class="form">
                 <div class="field full">
                   <label for="contents-text">
-                    Unidades y temas.
+                    Unidades y temas
                   </label>
 
                   <textarea id="contents-text"></textarea>
@@ -383,7 +386,7 @@ Clases prácticas, ejercicios, proyectos y actividades de desarrollo de aplicaci
               <div class="form">
                 <div class="field full">
                   <label for="bibliography-text">
-                    Referencias bibliográficas.
+                    Referencias bibliográficas
                   </label>
 
                   <textarea id="bibliography-text"></textarea>
@@ -399,19 +402,19 @@ Clases prácticas, ejercicios, proyectos y actividades de desarrollo de aplicaci
                 <div class="field">
                   <label for="midterm-assessment"> Evaluación parcial </label>
 
-                  <input type="text" id="midterm-assessment" value="30%" />
+                  <input type="text" id="midterm-assessment" placeholder="30%" />
                 </div>
 
                 <div class="field">
                   <label for="final-assessment"> Evaluación final </label>
 
-                  <input type="text" id="final-assessment" value="40%" />
+                  <input type="text" id="final-assessment" placeholder="40%" />
                 </div>
 
                 <div class="field">
                   <label for="project-assessment"> Proyecto </label>
 
-                  <input type="text" id="project-assessment" value="30%" />
+                  <input type="text" id="project-assessment" placeholder="30%" />
                 </div>
               </div>
             </div>
@@ -425,8 +428,8 @@ Clases prácticas, ejercicios, proyectos y actividades de desarrollo de aplicaci
           <button type="button" id="submit-review" class="save" hidden>
             Enviar a revisión
           </button>
-          <button type="button" id="review-program" hidden>Tomar revisión</button>
-          <button type="button" id="return-program" hidden>Devolver al docente</button>
+          <button type="button" id="review-program" hidden>Iniciar revisión</button>
+          <button type="button" id="return-program" hidden>Devolver para correcciones</button>
           <button type="button" id="approve-program" hidden>Aprobar</button>
           <button type="button" id="authorize-version" hidden>Autorizar versión</button>
           <button type="button" id="pdf-preview" hidden>Descargar PDF autorizado</button>

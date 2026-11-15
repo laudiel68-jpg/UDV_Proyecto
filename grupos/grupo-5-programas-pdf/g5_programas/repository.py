@@ -551,6 +551,7 @@ def list_programs(
     sede_id: int | None = None,
     estado: str | None = None,
     version: int | None = None,
+    docente_responsable_id: int | None = None,
 ):
     """Lista programas/versiones paginados y aplica los filtros solicitados."""
     conditions = []
@@ -565,6 +566,9 @@ def list_programs(
         if value is not None:
             conditions.append(f"{column} = :{parameter}")
             params[parameter] = value
+    if docente_responsable_id is not None:
+        conditions.append("pv.docente_responsable_id = :docente_responsable_id")
+        params["docente_responsable_id"] = docente_responsable_id
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
     from_clause = """
         FROM programa_curso pc
@@ -583,7 +587,17 @@ def list_programs(
         f"""SELECT pc.id, pc.curso_id, pc.sede_id, pc.modalidad_id, pc.activo,
                    c.codigo, c.nombre AS asignatura, s.nombre AS sede,
                    m.nombre AS modalidad, pv.id AS programa_version_id,
-                   pv.numero_version, p.codigo AS periodo, pv.estado_codigo AS estado
+                   pv.numero_version, p.codigo AS periodo, pv.estado_codigo AS estado,
+                   (SELECT MAX(v.numero_version) FROM programa_version v
+                    WHERE v.programa_curso_id = pc.id AND v.estado_codigo = 'authorized')
+                    AS version_actual,
+                   (SELECT p_vigente.codigo
+                    FROM programa_version v_vigente
+                    JOIN periodo p_vigente ON p_vigente.id = v_vigente.periodo_id
+                    WHERE v_vigente.programa_curso_id = pc.id
+                      AND v_vigente.estado_codigo = 'authorized'
+                    ORDER BY v_vigente.numero_version DESC, v_vigente.periodo_id DESC
+                    LIMIT 1) AS periodo_vigente
             {from_clause}{where_clause}
             ORDER BY pc.id DESC, pv.periodo_id DESC, pv.numero_version DESC
             LIMIT :limit OFFSET :offset""",
@@ -716,7 +730,13 @@ def update_version(session: Session, actor: Actor, version_id: int, body: dict, 
     with session.begin():
         set_database_actor(session, actor)
         row = _require_version(session, version_id, lock=True)
-        if actor.id != row.get("docente_responsable_id") and not has_role(actor, "manager"):
+        is_manager = has_role(actor, "manager")
+        is_author = has_role(actor, "author")
+        is_assigned_teacher = (
+            "teacher" in actor.roles
+            and actor.id == row.get("docente_responsable_id")
+        )
+        if not is_manager and not (is_author and is_assigned_teacher):
             raise ApiError(
                 403,
                 "FORBIDDEN",
@@ -808,6 +828,7 @@ def transition(session: Session, actor: Actor, version_id: int, action: str, com
         new_status = next_status(action, current)
 
         if action == "submit":
+            _require_teacher_is_responsible(actor, row.get("docente_responsable_id"))
             _validate_for_submit(session, version_id, row)
         if action == "return" and not (comment and comment.strip()):
             raise ApiError(422, "VALIDATION_ERROR", "La devolución requiere una observación.", {"comentario": "Este campo es obligatorio."})
@@ -967,6 +988,19 @@ def _validate_responsible_teacher(
     return teacher_id
 
 
+def _require_teacher_is_responsible(actor: Actor, responsible_id: int | None) -> None:
+    if (
+        "teacher" in actor.roles
+        and "coordinator" not in actor.roles
+        and actor.id != responsible_id
+    ):
+        raise ApiError(
+            403,
+            "FORBIDDEN",
+            "Un docente solo puede trabajar en versiones donde figura como responsable.",
+        )
+
+
 # Creación de programas y versiones, y registro del PDF generado.
 def create_program(session: Session, actor: Actor, body: dict):
     """Guarda un programa nuevo y crea su primera versión en borrador."""
@@ -1025,6 +1059,7 @@ def create_program(session: Session, actor: Actor, body: dict):
                 body["periodo_id"],
                 body["sede_id"],
             )
+            _require_teacher_is_responsible(actor, responsible_id)
         context = _one(
             session,
             """SELECT pc.id, pc.curso_id FROM programa_curso pc

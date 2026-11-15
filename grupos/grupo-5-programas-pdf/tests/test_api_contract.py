@@ -141,6 +141,7 @@ class ApiContractTests(unittest.TestCase):
             sede_id=2,
             estado="draft",
             version=4,
+            docente_responsable_id=12,
         )
 
         self.assertEqual(result, {"page": 2, "per_page": 10, "total": 1, "data": []})
@@ -153,6 +154,7 @@ class ApiContractTests(unittest.TestCase):
             "pc.sede_id = :sede_id",
             "pv.estado_codigo = :estado",
             "pv.numero_version = :version",
+            "pv.docente_responsable_id = :docente_responsable_id",
         )
         for expression in expected_filters:
             self.assertIn(expression, count_sql)
@@ -163,6 +165,7 @@ class ApiContractTests(unittest.TestCase):
             "sede_id": 2,
             "estado": "draft",
             "version": 4,
+            "docente_responsable_id": 12,
         }
         self.assertEqual(count_call.args[1], expected_params)
         self.assertEqual(
@@ -339,21 +342,31 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(body["error"]["code"], "FORBIDDEN")
         create_program_mock.assert_not_called()
 
-    def test_admin_with_g1_programs_manage_can_create_programs_over_http(self):
+    def test_author_can_create_and_manager_can_open_versions_over_http(self):
         app = FastAPI()
         registrar_errores(app)
         app.include_router(router)
+        teacher = SimpleNamespace(
+            id=5,
+            nombres="Diego",
+            apellidos="Docente",
+            roles=[SimpleNamespace(codigo="teacher")],
+        )
         admin = SimpleNamespace(
             id=1,
             nombres="Ana",
             apellidos="Administradora",
             roles=[SimpleNamespace(codigo="admin")],
         )
+        users = {"teacher-token": teacher, "admin-token": admin}
 
         async def g2_user(request: Request):
-            if request.headers.get("authorization") != "Bearer admin-token":
+            authorization = request.headers.get("authorization", "")
+            token = authorization.removeprefix("Bearer ")
+            user = users.get(token)
+            if user is None:
                 raise ApiError(401, "UNAUTHENTICATED", "Token de prueba inválido.")
-            return admin
+            return user
 
         def test_session():
             yield Mock()
@@ -383,7 +396,24 @@ class ApiContractTests(unittest.TestCase):
                     "periodo_id": 1,
                 }).encode(),
             )
+            self.assertEqual(status, 403)
+            create_program_mock.assert_not_called()
 
+            status, body = _asgi_request(
+                app,
+                "POST",
+                "/api/v1/course-programs",
+                headers=[
+                    (b"authorization", b"Bearer teacher-token"),
+                    (b"content-type", b"application/json"),
+                ],
+                body=json.dumps({
+                    "curso_id": 1,
+                    "sede_id": 1,
+                    "modalidad_id": 1,
+                    "periodo_id": 1,
+                }).encode(),
+            )
             self.assertEqual(status, 201)
             self.assertEqual(body["programa"]["id"], 8)
             create_program_mock.assert_called_once()
@@ -402,6 +432,146 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(body["numero_version"], 2)
         create_version_mock.assert_called_once()
+
+    def test_teacher_program_list_is_filtered_to_assigned_versions(self):
+        app = FastAPI()
+        registrar_errores(app)
+        app.include_router(router)
+        users = {
+            "teacher-token": SimpleNamespace(
+                id=5,
+                nombres="Diego",
+                apellidos="Docente",
+                roles=[SimpleNamespace(codigo="teacher")],
+            ),
+            "coordinator-token": SimpleNamespace(
+                id=6,
+                nombres="Coordinación",
+                apellidos="",
+                roles=[SimpleNamespace(codigo="coordinator")],
+            ),
+            "reviewer-token": SimpleNamespace(
+                id=7,
+                nombres="Revisión",
+                apellidos="",
+                roles=[SimpleNamespace(codigo="reviewer")],
+            ),
+        }
+
+        async def g2_user(request: Request):
+            token = request.headers.get("authorization", "").removeprefix("Bearer ")
+            return users[token]
+
+        def test_session():
+            yield Mock()
+
+        app.dependency_overrides[g5_auth.obtener_usuario_actual] = g2_user
+        app.dependency_overrides[get_session] = test_session
+
+        with patch(
+            "g5_programas.router.repository.list_programs",
+            return_value={"page": 1, "per_page": 20, "total": 0, "data": []},
+        ) as list_programs_mock:
+            for token in ("teacher-token", "coordinator-token", "reviewer-token"):
+                status, _ = _asgi_request(
+                    app,
+                    "GET",
+                    "/api/v1/course-programs",
+                    headers=[(b"authorization", f"Bearer {token}".encode())],
+                )
+                self.assertEqual(status, 200)
+
+        self.assertEqual(
+            [
+                call.kwargs["docente_responsable_id"]
+                for call in list_programs_mock.call_args_list
+            ],
+            [5, None, None],
+        )
+
+    def test_teacher_cannot_submit_another_teachers_version(self):
+        teacher = g5_auth.Actor(
+            id=5,
+            name="Docente",
+            roles=frozenset({"teacher"}),
+        )
+        session = Mock()
+        session.begin.return_value = nullcontext()
+        version = {
+            "id": 41,
+            "estado_codigo": "draft",
+            "docente_responsable_id": 8,
+        }
+
+        with patch("g5_programas.repository.set_database_actor"), patch(
+            "g5_programas.repository._require_version",
+            return_value=version,
+        ), patch("g5_programas.repository._validate_for_submit") as validate:
+            with self.assertRaises(ApiError) as caught:
+                repository.transition(session, teacher, 41, "submit")
+
+        self.assertEqual(caught.exception.status, 403)
+        validate.assert_not_called()
+
+    def test_coordinator_can_perform_review_transitions_over_http(self):
+        app = FastAPI()
+        registrar_errores(app)
+        app.include_router(router)
+        coordinator = SimpleNamespace(
+            id=6,
+            nombres="Coordinación",
+            apellidos="",
+            roles=[SimpleNamespace(codigo="coordinator")],
+        )
+
+        async def g2_user(request: Request):
+            if request.headers.get("authorization") != "Bearer coordinator-token":
+                raise ApiError(401, "UNAUTHENTICATED", "Token de prueba inválido.")
+            return coordinator
+
+        def test_session():
+            yield Mock()
+
+        app.dependency_overrides[g5_auth.obtener_usuario_actual] = g2_user
+        app.dependency_overrides[get_session] = test_session
+
+        with patch(
+            "g5_programas.router.repository.transition",
+            return_value={"id": 41},
+        ) as transition:
+            for action, body in (
+                ("review", b"{}"),
+                ("return", b'{"comentario":"Corregir"}'),
+                ("approve", b"{}"),
+            ):
+                status, _ = _asgi_request(
+                    app,
+                    "POST",
+                    f"/api/v1/program-versions/41/{action}",
+                    headers=[
+                        (b"authorization", b"Bearer coordinator-token"),
+                        (b"content-type", b"application/json"),
+                    ],
+                    body=body,
+                )
+                self.assertEqual(status, 200)
+
+        self.assertEqual(
+            [call.args[3] for call in transition.call_args_list],
+            ["review", "return", "approve"],
+        )
+
+    def test_teacher_can_only_be_assigned_to_their_own_program_version(self):
+        teacher = g5_auth.Actor(
+            id=5,
+            name="Docente",
+            roles=frozenset({"teacher"}),
+        )
+        repository._require_teacher_is_responsible(teacher, 5)
+
+        with self.assertRaises(ApiError) as caught:
+            repository._require_teacher_is_responsible(teacher, 8)
+        self.assertEqual(caught.exception.status, 403)
 
     def test_version_editing_is_limited_to_owner_or_program_manager_over_http(self):
         app = FastAPI()

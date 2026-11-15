@@ -123,16 +123,15 @@ inicio de sesión pertenece a G2 y se realiza desde el portal común de `/app/`
 mediante `POST /api/v1/auth/login`; G5 no implementa un login propio.
 Reutiliza el token `sessionStorage["udv_token"]` y lo envía en el encabezado
 `Authorization: Bearer` a la API del mismo origen. La pantalla carga el
-listado de programas para que el usuario seleccione uno, por lo que
+listado de programas y permite abrir uno con el botón **Abrir**, por lo que
 `program_id` en la URL es opcional.
 
-El selector presenta los códigos oficiales de G1: `admin`, `coordinator`,
-`teacher`, `reviewer`, `authority` y `auditor`. Según el seed, `admin`,
-`coordinator` y `reviewer` tienen `programs.manage`; `reviewer` puede
-revisar/aprobar y `authority` puede autorizar. La pantalla permite a los
-gestores y al docente asignado editar su versión; bloquea a otros usuarios.
-Solo los gestores pueden cambiar al docente responsable. Enviar a revisión sigue
-limitado a coordinación y revisión.
+La lista muestra todos los programas a coordinación y revisión, y solo las
+versiones asignadas al docente autenticado. El docente responsable elabora,
+edita y envía su propia versión; coordinación también puede elaborar y enviar.
+Coordinación y revisión pueden revisar, devolver y aprobar; `authority`
+autoriza. `admin`, coordinación y revisión pueden abrir versiones nuevas.
+El backend valida los códigos oficiales de G1 en cada operación.
 La pantalla usa los estilos comunes de `/udv-styles/udv.css`.
 
 Los cuerpos de escritura están descritos con modelos Pydantic para que

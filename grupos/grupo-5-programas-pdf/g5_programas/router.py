@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
-from .auth import Actor, authenticated_actor, require_role
+from .auth import Actor, authenticated_actor, has_role, require_role
 from .database import get_session
 from .domain import ACTOR_ROLES
 from . import repository
@@ -51,6 +51,11 @@ def list_course_programs(
 ):
     """Muestra programas paginados y permite filtrar por curso y versión."""
     require_role(actor, "reader")
+    responsible_id = (
+        actor.id
+        if "teacher" in actor.roles and not has_role(actor, "manager")
+        else None
+    )
     return repository.list_programs(
         session,
         page,
@@ -60,13 +65,14 @@ def list_course_programs(
         sede_id=sede_id,
         estado=estado,
         version=version,
+        docente_responsable_id=responsible_id,
     )
 
 
 @router.post("/course-programs", status_code=201)
 def post_course_program(body: ProgramaNuevo, session: DbSession, actor: CurrentActor):
-    """Crea un programa con su primer borrador; requiere gestión de programas."""
-    require_role(actor, "manager")
+    """Crea un programa con su primer borrador; requiere permiso de elaboración."""
+    require_role(actor, "author")
     return repository.create_program(session, actor, body.model_dump(exclude_unset=True))
 
 

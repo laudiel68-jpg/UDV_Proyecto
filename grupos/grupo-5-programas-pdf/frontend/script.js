@@ -23,7 +23,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const loginStatus = $("#login-status");
   const appContainer = $(".container");
   const role = $("#role");
-  const programSelect = $("#program-select");
+  const programList = $("#program-list");
   const programStatus = $("#program-status");
   const versionNumberLabel = $("#version-number");
   const saveStatus = $("#save-status");
@@ -63,7 +63,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   let isSaving = false;
 
   const PROGRAM_MANAGERS = ["admin", "coordinator", "reviewer"];
-  const PROGRAM_SUBMITTERS = ["coordinator", "reviewer"];
+  const PROGRAM_AUTHORS = ["teacher", "coordinator"];
+  const PROGRAM_REVIEWERS = ["coordinator", "reviewer"];
 
   const roleNames = {
     admin: "Administrador de programas",
@@ -153,8 +154,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       .sort((a, b) => b.numero_version - a.numero_version);
 
     if (selectedRole === "teacher") {
-      const assignedVersion = editableVersions.find(isAssignedTeacher);
-      if (assignedVersion) return assignedVersion;
+      return (
+        editableVersions.find(isAssignedTeacher) ||
+        programVersions
+          .filter(isAssignedTeacher)
+          .sort((a, b) => b.numero_version - a.numero_version)[0] ||
+        null
+      );
     }
 
     return (
@@ -182,8 +188,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       latestVersion.estado !== "authorized"
     ) {
       const nextStep = {
-        draft: PROGRAM_SUBMITTERS.includes(role.value)
-          ? "un usuario con permiso de gestión debe enviarla a revisión"
+        draft: PROGRAM_AUTHORS.includes(role.value)
+          ? "el docente responsable o coordinación debe enviarla a revisión"
           : "coordinación o revisión debe enviarla a revisión",
         submitted: "un revisor debe tomar la revisión",
         under_review: "un revisor debe aprobarla o devolverla",
@@ -242,14 +248,43 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!uniquePrograms.has(item.id)) uniquePrograms.set(item.id, item);
     });
 
-    programSelect.replaceChildren(new Option("Selecciona un programa", ""));
+    programList.replaceChildren();
+    if (!uniquePrograms.size) {
+      const empty = document.createElement("li");
+      empty.textContent = "No hay programas disponibles para tu usuario.";
+      programList.append(empty);
+      return uniquePrograms;
+    }
+
     uniquePrograms.forEach((item) => {
-      const details = [item.codigo, item.asignatura, item.periodo, item.estado]
+      const row = document.createElement("li");
+      const details = document.createElement("div");
+      const course = document.createElement("strong");
+      course.textContent = [item.codigo, item.asignatura]
         .filter(Boolean)
-        .join(" · ");
-      programSelect.add(new Option(details || `Programa ${item.id}`, String(item.id)));
+        .join(" · ") || `Programa ${item.id}`;
+      const period = document.createElement("p");
+      period.textContent = `Período: ${item.periodo_vigente || item.periodo || "Sin período"}`;
+      const currentVersion = document.createElement("p");
+      currentVersion.textContent = item.version_actual
+        ? `Versión vigente: ${item.version_actual}`
+        : "Sin versión vigente";
+      details.append(course, period, currentVersion);
+
+      const openButton = document.createElement("button");
+      openButton.type = "button";
+      openButton.className = "btn-udv btn-udv-primary";
+      openButton.textContent = "Abrir";
+      openButton.addEventListener("click", () => {
+        void withLoading(async () => {
+          await openProgram(item.id);
+          showMessage("Programa cargado desde el servidor.");
+        });
+      });
+
+      row.append(details, openButton);
+      programList.append(row);
     });
-    programSelect.hidden = uniquePrograms.size === 0;
     return uniquePrograms;
   }
 
@@ -269,29 +304,34 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
-      const selectedId = programId && programs.has(programId)
-        ? programId
-        : !programId && programs.size === 1
-          ? programs.keys().next().value
-          : null;
+      const selectedId = programId && programs.has(programId) ? programId : null;
       if (selectedId) {
-        programId = selectedId;
-        programSelect.value = String(selectedId);
-        await loadProgram(selectedId);
+        await openProgram(selectedId);
         showMessage("Programa cargado desde el servidor.");
       } else {
         programId = null;
-        programSelect.value = "";
         showMessage(
           hasRequestedProgramId
             ? "El programa solicitado no está disponible. Selecciona otro."
-            : "Selecciona un programa para continuar.",
+            : "Selecciona un programa de la lista y pulsa Abrir.",
         );
       }
     } catch (error) {
       console.error(error);
       showMessage("No se pudo cargar el programa: " + error.message);
     }
+  }
+
+  async function openProgram(id) {
+    programId = id;
+    program = null;
+    programVersions = [];
+    programLoaded = false;
+    programFields.forEach((control) => { control.disabled = true; });
+    const url = new URL(window.location.href);
+    url.searchParams.set("program_id", String(id));
+    window.history.replaceState(null, "", url);
+    await loadProgram(id);
   }
 
   /** Muestra un aviso junto al encabezado del programa. */
@@ -669,25 +709,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     showMessage(getVersionStatusMessage());
   });
 
-  programSelect.addEventListener("change", async () => {
-    const selectedId = Number(programSelect.value);
-    if (!Number.isSafeInteger(selectedId) || selectedId <= 0) {
-      if (programId) programSelect.value = String(programId);
-      else showMessage("Selecciona un programa para continuar.");
-      return;
-    }
-
-    programId = selectedId;
-    program = null;
-    programVersions = [];
-    programLoaded = false;
-    programFields.forEach((control) => { control.disabled = true; });
-    await withLoading(async () => {
-      await loadProgram(selectedId);
-      showMessage("Programa cargado desde el servidor.");
-    });
-  });
-
   // Guardar todas las secciones de la versión.
   saveButton.addEventListener("click", async () => {
     if (!canEditCurrentVersion()) {
@@ -707,8 +728,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Antes de enviar, guarda los campos actuales para que la revisión use lo más reciente.
   submitForReviewButton.addEventListener("click", async () => {
-    if (!PROGRAM_SUBMITTERS.includes(role.value)) {
-      alert("Solo coordinación o revisión pueden enviar el programa a revisión.");
+    if (
+      !PROGRAM_AUTHORS.includes(role.value) ||
+      (role.value === "teacher" && !isAssignedTeacher())
+    ) {
+      alert("Solo el docente responsable de la versión o coordinación pueden enviarla a revisión.");
       return;
     }
 
@@ -730,26 +754,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   reviewButton.addEventListener("click", async () => {
-    if (role.value !== "reviewer" || state !== "submitted") {
-      alert("Solo un usuario con el rol G1 reviewer puede tomar una versión enviada.");
+    if (!PROGRAM_REVIEWERS.includes(role.value) || state !== "submitted") {
+      alert("Solo revisión o coordinación pueden tomar una versión enviada.");
       return;
     }
     await withLoading(() => executeAction("review", "Revisión iniciada."));
   });
 
   returnButton.addEventListener("click", async () => {
-    if (role.value !== "reviewer") {
-      alert("Solo un usuario con el rol G1 reviewer puede devolver el programa.");
+    if (!PROGRAM_REVIEWERS.includes(role.value)) {
+      alert("Solo revisión o coordinación pueden devolver el programa.");
       return;
     }
 
     if (state !== "under_review") {
       alert("El programa debe estar en revisión.");
-      return;
-    }
-
-    if (!coordinatorName.value.trim()) {
-      alert("Escribe el nombre del coordinador académico.");
       return;
     }
 
@@ -768,18 +787,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   approveButton.addEventListener("click", async () => {
-    if (role.value !== "reviewer") {
-      alert("Solo un usuario con el rol G1 reviewer puede aprobar el programa.");
+    if (!PROGRAM_REVIEWERS.includes(role.value)) {
+      alert("Solo revisión o coordinación pueden aprobar el programa.");
       return;
     }
 
     if (state !== "under_review") {
       alert("El programa debe estar en revisión.");
-      return;
-    }
-
-    if (!coordinatorName.value.trim()) {
-      alert("Escribe el nombre del coordinador académico.");
       return;
     }
 
@@ -965,7 +979,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (
-      PROGRAM_SUBMITTERS.includes(role.value) &&
+      PROGRAM_AUTHORS.includes(role.value) &&
+      (role.value !== "teacher" || isAssignedTeacher()) &&
       ["draft", "returned"].includes(state)
     ) {
       submitForReviewButton.hidden = false;
@@ -975,7 +990,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       authorizeButton.hidden = false;
     }
 
-    if (role.value === "reviewer") {
+    if (PROGRAM_REVIEWERS.includes(role.value)) {
       if (state === "submitted") {
         reviewButton.hidden = false;
       }

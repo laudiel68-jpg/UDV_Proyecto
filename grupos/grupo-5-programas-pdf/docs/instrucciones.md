@@ -28,12 +28,11 @@ y el [`CONTRATO_COMUN.md`](https://github.com/jonnyverasdl-cloud/UDV_Proyecto/bl
 El selector se llena con los roles de la cuenta autenticada en G2. Solo cambia
 la vista de trabajo; el backend vuelve a validar los permisos en cada ruta.
 G5 usa únicamente los códigos oficiales de G1: `admin`, `coordinator`,
-`teacher`, `reviewer`, `authority` y `auditor`. Según el seed vigente,
-`admin`, `coordinator` y `reviewer` tienen permiso de gestión; solo `reviewer`
-tiene permiso de revisión; `authority` autoriza. Los gestores pueden crear y
-editar borradores; además, el docente asignado puede editar su propia versión.
-Un usuario sin esos permisos ni asignación recibe 403. El envío a revisión
-sigue reservado a `coordinator` y `reviewer`.
+`teacher`, `reviewer`, `authority` y `auditor`. El docente responsable elabora,
+edita y envía su propia versión; coordinación también puede elaborar y enviar.
+Coordinación y revisión pueden revisar, devolver y aprobar; `authority`
+autoriza. `admin`, coordinación y revisión pueden abrir versiones nuevas. El
+backend valida los roles oficiales y restringe al docente a sus versiones.
 
 ## Flujo que debe validar QA
 
@@ -48,10 +47,10 @@ draft -> submitted -> under_review -> approved -> authorized
 
 | Acción | Estado inicial | Resultado | Rol esperado |
 |---|---|---|---|
-| Enviar (`submit`) | `draft` o `returned` | `submitted` | `coordinator` o `reviewer` |
-| Tomar revisión (`review`) | `submitted` | `under_review` | `reviewer` |
-| Devolver (`return`) | `under_review` | `returned` | `reviewer` |
-| Aprobar (`approve`) | `under_review` | `approved` | `reviewer` |
+| Enviar (`submit`) | `draft` o `returned` | `submitted` | Docente responsable |
+| Tomar revisión (`review`) | `submitted` | `under_review` | Coordinación o revisión |
+| Devolver (`return`) | `under_review` | `returned` | Coordinación o revisión |
+| Aprobar (`approve`) | `under_review` | `approved` | Coordinación o revisión |
 | Autorizar (`authorize`) | `approved` | `authorized` | `authority` |
 
 Comprobar también que solo `draft` y `returned` se puedan editar, que una
@@ -82,11 +81,11 @@ inmutable; una nueva versión se crea como borrador clonado.
 - [ ] Probar una petición autenticada con el token de G2. Confirmar que
       el usuario y sus roles llegan desde `obtener_usuario_actual`, no desde
       el selector del navegador.
-- [ ] Comprobar la matriz de permisos G1: `admin`, coordinación y revisión
-      gestionan borradores; `reviewer` revisa y aprueba; `authority` autoriza.
+- [ ] Comprobar la matriz de roles: el docente asignado elabora, edita y envía
+      su propia versión; coordinación y revisión aprueban; `authority` autoriza.
 - [ ] Verificar que `admin`, `coordinator` y `reviewer` puedan gestionar
-      borradores; el docente asignado puede editar su versión, pero otro
-      docente y `auditor` reciben 403.
+      borradores y abrir versiones; el docente asignado puede crear, editar y
+      enviar su versión, pero otro docente y `auditor` reciben 403.
 - [ ] En Swagger, confirmar que los cuerpos de creación, nueva versión,
       encabezado y transiciones muestren sus campos en lugar de un objeto
       genérico.
