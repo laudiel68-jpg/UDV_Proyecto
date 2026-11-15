@@ -5,7 +5,7 @@ Expone un `router` (APIRouter con prefijo /api/v1) que el main.py de la raíz mo
 
 - El usuario sale del token de G2 (ver auth.py), no de headers.
 - Errores con el formato del CONTRATO_COMUN: {"error": {"code", "message", "details"}}.
-- Paginación: {"items": [...], "page": 1, "page_size": 20, "total": 0}
+- Paginación: {"page": 1, "per_page": 20, "total": 0, "data": [...]}
 """
 from typing import Optional
 
@@ -28,6 +28,14 @@ PREFIX = "/api/v1"
 ASSIGNMENT_ACTIONS = ("start", "submit", "resubmit", "review", "return", "approve")
 
 
+def _codigo_mayusculas(body):
+    """El CONTRATO_COMUN pide los códigos de error en MAYÚSCULAS (INVALID_TRANSITION)."""
+    err = body.get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict) and isinstance(err.get("code"), str):
+        err["code"] = err["code"].upper()
+    return body
+
+
 class FormatoErrorRoute(APIRoute):
     """Convierte los errores de dominio y de validación al formato del CONTRATO_COMUN, sin
     depender de manejadores registrados en la app de la raíz."""
@@ -39,9 +47,9 @@ class FormatoErrorRoute(APIRoute):
             try:
                 return await original(request)
             except WorkflowError as exc:
-                return JSONResponse(exc.to_dict(), status_code=exc.status_code)
+                return JSONResponse(_codigo_mayusculas(exc.to_dict()), status_code=exc.status_code)
             except RequestValidationError as exc:
-                return JSONResponse(validation_body(exc), status_code=422)
+                return JSONResponse(_codigo_mayusculas(validation_body(exc)), status_code=422)
 
         return handler
 
@@ -95,9 +103,9 @@ class CancelIn(BaseModel):
 
 # ------------------------------------------------------------- task types
 @router.get("/task-types", tags=["task-types"])
-def get_task_types(page: int = Query(1), page_size: int = Query(20),
+def get_task_types(page: int = Query(1), per_page: int = Query(20),
                    conn=Depends(get_conn), user=Depends(current_user)):
-    return tasks.list_task_types(conn, page, page_size)
+    return tasks.list_task_types(conn, page, per_page)
 
 
 @router.post("/task-types", status_code=201, tags=["task-types"])
@@ -108,9 +116,9 @@ def post_task_type(body: TaskTypeIn, conn=Depends(get_conn), user=Depends(curren
 # ------------------------------------------------------------------ tasks
 @router.get("/tasks", tags=["tasks"])
 def get_tasks(status: Optional[str] = None, page: int = Query(1),
-              page_size: int = Query(20), conn=Depends(get_conn),
+              per_page: int = Query(20), conn=Depends(get_conn),
               user=Depends(current_user)):
-    return tasks.list_tasks(conn, user, status, page, page_size)
+    return tasks.list_tasks(conn, user, status, page, per_page)
 
 
 @router.post("/tasks", status_code=201, tags=["tasks"])
@@ -148,9 +156,9 @@ def post_cancel(task_id: int, body: CancelIn = CancelIn(), conn=Depends(get_conn
 
 @router.get("/tasks/{task_id}/assignments", tags=["tracking"])
 def get_task_assignments(task_id: int, status: Optional[str] = None,
-                         page: int = Query(1), page_size: int = Query(20),
+                         page: int = Query(1), per_page: int = Query(20),
                          conn=Depends(get_conn), user=Depends(current_user)):
-    return tasks.list_task_assignments(conn, user, task_id, status, page, page_size)
+    return tasks.list_task_assignments(conn, user, task_id, status, page, per_page)
 
 
 # ------------------------------------------------------------ assignments

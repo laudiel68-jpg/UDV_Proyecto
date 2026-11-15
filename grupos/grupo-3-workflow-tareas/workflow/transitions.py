@@ -21,7 +21,7 @@ import re
 from . import events
 from .db import MySQLConn, set_actor, transaction, utcnow
 from .errors import Conflict, Forbidden, NotFound, ValidationFailed
-from .matrix import ACTIONS, BY_ACTION, FLOWS
+from .matrix import ACTIONS, ADMIN, BY_ACTION, COORDINATOR, FLOWS
 
 
 def _is_mysql(conn) -> bool:
@@ -61,7 +61,7 @@ def get_rule(flow, state, action):
     if rule is None:
         raise Conflict(
             f"La acción '{action}' no es válida desde el estado '{state}'",
-            details={"state": state, "action": action}, code="invalid_transition")
+            details={"state": state, "action": action}, code="INVALID_TRANSITION")
     return rule
 
 
@@ -76,8 +76,20 @@ def authorize(rule, actor, task, assignee_id=None):
         if actor["id"] != assignee_id:
             raise Forbidden("Solo el docente destinatario puede ejecutar esta acción")
     elif rule.scope == "task_reviewer":
-        if task["reviewer_id"] is not None and task["reviewer_id"] != actor["id"]:
-            raise Forbidden("No eres el revisor designado de esta tarea")
+        # Regla de QA (hallazgo #15):
+        #   * con revisor_id  -> ÚNICAMENTE el revisor designado (ni coordinación ni admin);
+        #   * sin revisor_id  -> solo administración, o la coordinación dueña de la tarea.
+        # Los roles exentos (unscoped_roles, p. ej. la autoridad al aprobar) ya salieron arriba.
+        if task["reviewer_id"] is not None:
+            if task["reviewer_id"] != actor["id"]:
+                raise Forbidden("No eres el revisor designado de esta tarea")
+        elif ADMIN in roles:
+            pass
+        elif COORDINATOR in roles and actor["id"] in (task["created_by"], task["responsible_id"]):
+            pass
+        else:
+            raise Forbidden("La tarea no tiene revisor designado: solo coordinación o "
+                            "administración puede ejecutar esta acción")
     elif rule.scope == "task_coordinator":
         if actor["id"] not in (task["created_by"], task["responsible_id"]):
             raise Forbidden("No eres el coordinador autorizado de esta tarea")
@@ -121,7 +133,7 @@ def record_transition(conn, assignment_id, actor_id, action, from_state, to_stat
         if wd is None:
             raise Conflict(
                 f"El workflow de la tarea no define la transición '{from_state}' -> '{to_state}'",
-                details={"state": from_state, "action": action}, code="invalid_transition")
+                details={"state": from_state, "action": action}, code="INVALID_TRANSITION")
         conn.execute(
             "INSERT INTO tarea_transicion (tarea_destinatario_id, workflow_detalle_id, actor_id,"
             " estado_anterior, estado_nuevo, comentario) VALUES (?,?,?,?,?,?)",
@@ -171,8 +183,10 @@ _SELECT_MYSQL = (
     "       td.estado_codigo AS status, COALESCE(td.fecha_limite, t.fecha_limite) AS due_date,"
     "       t.titulo AS title, t.creado_por AS created_by, NULL AS responsible_id,"
     "       COALESCE(td.revisor_id, t.revisor_id) AS reviewer_id,"
-    "       'standard' AS flow, t.id AS tid"
+    "       'standard' AS flow, t.id AS tid, COALESCE(tt.requiere_archivo, 0) AS requires_file"
     " FROM tarea_destinatario td JOIN tarea t ON t.id = td.tarea_id"
+    " LEFT JOIN workflow w ON w.id = t.workflow_id"
+    " LEFT JOIN tipo_tarea tt ON tt.id = w.tipo_tarea_id"
     " WHERE td.id = ? AND t.eliminado_en IS NULL")
 
 _RESULT_SQLITE = "SELECT * FROM assignments WHERE id = ?"
@@ -195,12 +209,12 @@ def _translate_db_error(exc):
     errno, msg = args[0], str(args[1])
     if errno in (1205, 1213):                              # lock wait timeout / deadlock
         return Conflict("La asignación está siendo modificada por otra solicitud",
-                        code="concurrent_update")
+                        code="CONCURRENT_UPDATE")
     if errno == 1644:                                      # SIGNAL SQLSTATE '45000'
         found = _COMMENT_CODE.search(msg)
         code = found.group(1) if found else None
         if code == "409":
-            return Conflict(msg, code="db_conflict")
+            return Conflict(msg, code="DB_CONFLICT")
         if code == "422":
             return ValidationFailed(msg, details={"source": "database"})
         if code == "404":
@@ -209,6 +223,43 @@ def _translate_db_error(exc):
 
 
 # ------------------------------------------------------------------ operación principal
+
+
+ENTREGA_ACTIONS = ('submit', 'resubmit')
+
+def _current_entrega(conn, assignment_id):
+    """Id del intento actual: la última fila de `entrega` de la asignación que NO tiene una
+    transición 'submitted' posterior en tarea_transicion; None si no hay. Regla común de G3 y G4
+    (decisión del PM, 13-nov-2026). Hay que llamarla ANTES de registrar la transición de este
+    envío, porque esa misma transición cerraría el intento."""
+    row = conn.execute(
+        "SELECT e.id FROM entrega e WHERE e.tarea_destinatario_id = ?"
+        " AND NOT EXISTS (SELECT 1 FROM tarea_transicion tt"
+        "   WHERE tt.tarea_destinatario_id = e.tarea_destinatario_id"
+        "   AND tt.estado_nuevo = 'submitted' AND tt.creado_en >= e.entregado_en)"
+        " ORDER BY e.numero_intento DESC LIMIT 1", (assignment_id,)).fetchone()
+    return row["id"] if row else None
+
+
+def _entrega_has_files(conn, entrega_id) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM archivo WHERE entrega_id = ? AND eliminado_en IS NULL LIMIT 1",
+        (entrega_id,)).fetchone() is not None
+
+
+def _create_entrega(conn, assignment_id, actor_id):
+    """Crea la fila de `entrega` del intento (numero_intento = MAX + 1) con el texto del
+    borrador. Solo se llama si no existe un intento actual (G4 ya lo crea al vincular archivos)."""
+    conn.execute(
+        "INSERT INTO entrega (tarea_destinatario_id, numero_intento, entregado_por,"
+        " contenido_texto, programa_version_id)"
+        " SELECT ?, COALESCE(MAX(numero_intento), 0) + 1, ?,"
+        "  (SELECT contenido_texto FROM entrega_borrador WHERE tarea_destinatario_id = ?),"
+        "  (SELECT programa_version_id FROM entrega_borrador WHERE tarea_destinatario_id = ?)"
+        " FROM entrega WHERE tarea_destinatario_id = ?",
+        (assignment_id, actor_id, assignment_id, assignment_id, assignment_id))
+
+
 def perform(conn, assignment_id, action, actor, comment=None):
     """Ejecuta una acción sobre una asignación. Devuelve la asignación actualizada."""
     if action not in ACTIONS:
@@ -229,6 +280,17 @@ def perform(conn, assignment_id, action, actor, comment=None):
             raise ValidationFailed(f"La acción '{action}' requiere un comentario",
                                    details={"field": "comment"})
 
+        entrega_id = None
+        if mysql and action in ENTREGA_ACTIONS:
+            entrega_id = _current_entrega(conn, assignment_id)
+            if row["requires_file"] and (
+                entrega_id is None or not _entrega_has_files(conn, entrega_id)
+            ):
+                raise ValidationFailed(
+                    "Este tipo de tarea requiere adjuntar un archivo para entregar",
+                    details={"field": "file"}
+                )
+
         now = utcnow()
         try:
             # Primero el historial (el trigger de G1 mira el estado actual) y luego el UPDATE
@@ -238,7 +300,9 @@ def perform(conn, assignment_id, action, actor, comment=None):
             cur = _update_status(conn, assignment_id, rule.to_state, row["status"], now)
             if cur.rowcount != 1:                                      # carrera concurrente
                 raise Conflict("La asignación cambió de estado mientras se procesaba",
-                               code="concurrent_update")
+                               code="CONCURRENT_UPDATE")
+            if mysql and action in ENTREGA_ACTIONS and entrega_id is None:
+                _create_entrega(conn, assignment_id, actor["id"])
         except Exception as exc:
             mapped = _translate_db_error(exc)
             if mapped is None:

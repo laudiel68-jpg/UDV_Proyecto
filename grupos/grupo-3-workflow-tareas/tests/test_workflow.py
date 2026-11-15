@@ -232,6 +232,35 @@ class TransitionTests(Base):
         with self.assertRaises(ValidationFailed):
             self.do(aid, "explode", self.t[0])
 
+    # ------------------------------------------------ hallazgos #14 y #15
+    def test_reviewer_cannot_act_on_a_task_without_designated_reviewer(self):
+        """Hallazgo #15: sin revisor_id ningún revisor puede revisar; la autoridad sí aprueba."""
+        aid = self.assignment_of(self.make_task(reviewer_id=None, publish=True))
+        for a in ("start", "submit"):
+            self.do(aid, a, self.t[0])
+        before = self.snapshot()
+        for who in ("reviewer", "reviewer2"):
+            with self.subTest(who=who), self.assertRaises(Forbidden):
+                self.do(aid, "review", who)
+        self.assertEqual(before, self.snapshot())
+
+    def test_return_and_approve_are_restricted_to_the_designated_reviewer(self):
+        aid = self.assignment_of(self.make_task(publish=True))
+        for a, w in (("start", self.t[0]), ("submit", self.t[0]), ("review", "reviewer")):
+            self.do(aid, a, w)
+        before = self.snapshot()
+        for action, comment in (("return", "Falta algo"), ("approve", None)):
+            with self.subTest(action=action), self.assertRaises(Forbidden):
+                self.do(aid, action, "reviewer2", comment)
+        self.assertEqual(before, self.snapshot())
+
+    def test_error_codes_are_uppercase(self):
+        """Hallazgo #14: los códigos del contrato van en MAYÚSCULAS."""
+        aid = self.assignment_of(self.make_task(publish=True))
+        with self.assertRaises(Conflict) as cm:
+            self.do(aid, "approve", "authority")           # autorizada, pero estado inválido
+        self.assertEqual(cm.exception.code, "INVALID_TRANSITION")
+
 
 class TaskAndPublishTests(Base):
     def test_publish_all_creates_one_assignment_per_eligible_teacher(self):
@@ -301,7 +330,7 @@ class TaskAndPublishTests(Base):
         tasks.publish_task(self.conn, self.actor("coord"), tid)
         inbox = tasks.inbox(self.conn, t0)
         self.assertEqual(inbox["total"], 1)
-        self.assertEqual(inbox["items"][0]["status"], "assigned")
+        self.assertEqual(inbox["data"][0]["status"], "assigned")
 
     def test_edit_only_while_draft(self):
         tid = self.make_task()
@@ -379,11 +408,11 @@ class TaskAndPublishTests(Base):
         self.assertEqual(res["summary"]["total"], 5)
         by = res["summary"]["by_status"]
         self.assertEqual((by["assigned"], by["in_progress"], by["submitted"]), (3, 1, 1))
-        self.assertEqual(len(res["items"]), 5)
+        self.assertEqual(len(res["data"]), 5)
         only = tasks.list_task_assignments(self.conn, self.actor("coord"), tid, status="submitted")
         self.assertEqual(only["total"], 1)
         small = tasks.list_task_assignments(self.conn, self.actor("coord"), tid, page_size=2)
-        self.assertEqual((len(small["items"]), small["total"]), (2, 5))
+        self.assertEqual((len(small["data"]), small["total"]), (2, 5))
         with self.assertRaises(Forbidden):
             tasks.list_task_assignments(self.conn, self.actor("coord2"), tid)
 
@@ -392,6 +421,15 @@ class TaskAndPublishTests(Base):
         self.assertTrue(tasks.get_history(self.conn, self.actor(self.t[0]), aid))
         with self.assertRaises(Forbidden):
             tasks.get_history(self.conn, self.actor(self.t[1]), aid)
+
+    def test_pagination_follows_the_contract(self):
+        """Hallazgo #9: page, per_page, total, data."""
+        self.make_task(rule={"mode": "all"}, publish=True)
+        self.make_task()
+        res = tasks.list_tasks(self.conn, self.actor("coord"), page=1, page_size=1)
+        self.assertEqual(set(res), {"page", "per_page", "total", "data"})
+        self.assertEqual((res["page"], res["per_page"], res["total"], len(res["data"])),
+                         (1, 1, 2, 1))
 
 
 class SeedTests(unittest.TestCase):
@@ -405,6 +443,25 @@ class SeedTests(unittest.TestCase):
         self.assertEqual((ind["total"], mass["total"]), (1, 5))
         self.assertEqual(mass["summary"]["by_status"]["submitted"], 1)
         self.assertEqual(tasks.get_task(conn, coord, ids["draft_task"])["status"], "draft")
+
+
+class ErrorCodeTests(unittest.TestCase):
+    """Hallazgo #14: todos los códigos de error del contrato van en MAYÚSCULAS."""
+
+    def test_default_codes_are_uppercase(self):
+        from workflow import errors
+        classes = [c for c in vars(errors).values()
+                   if isinstance(c, type) and issubclass(c, errors.WorkflowError)]
+        self.assertGreaterEqual(len(classes), 6)
+        for cls in classes:
+            with self.subTest(cls=cls.__name__):
+                self.assertEqual(cls.code, cls.code.upper())
+        self.assertEqual(errors.NotFound("x").to_dict()["error"]["code"], "NOT_FOUND")
+        self.assertEqual(errors.ValidationFailed("x").code, "VALIDATION_ERROR")
+
+    def test_custom_code_is_uppercased(self):
+        from workflow.errors import Conflict
+        self.assertEqual(Conflict("x", code="invalid_transition").code, "INVALID_TRANSITION")
 
 
 if __name__ == "__main__":
