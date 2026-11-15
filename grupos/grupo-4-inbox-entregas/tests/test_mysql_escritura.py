@@ -231,6 +231,22 @@ def test_primer_envio_sin_archivo_y_reenvio_con_dos_archivos_usa_un_solo_intento
     assert sorted(numeros) in ([1, 2], [2]) and numeros.count(2) == 1
 
 
+# ------------------------------------------------------------ devolución visible
+def test_el_docente_ve_la_observacion_y_la_fecha_de_la_devolucion(c, s):
+    """Criterio de aceptación: una devolución exige observación visible para el docente."""
+    a = publicar(c, s, tipo=1)
+    accion(c, s["docente1"], a, "start")
+    accion(c, s["docente1"], a, "submit")
+    accion(c, s["revisor"], a, "review")
+    accion(c, s["revisor"], a, "return", "Falta la bibliografía de la unidad 3")
+    d = c.get(f"/api/v1/assignments/{a}", headers=s["docente1"]).json()
+    assert d["last_return"]["comment"] == "Falta la bibliografía de la unidad 3"
+    assert d["last_return"]["at"]                      # con fecha
+    # el historial sale en el orden en que pasó, aunque las fechas vengan en zonas distintas
+    assert [h["new_status"] for h in d["history"]] == [
+        "assigned", "in_progress", "submitted", "under_review", "returned"]
+
+
 # ------------------------------------------------------------ revisor designado
 def test_solo_el_revisor_designado_ve_la_asignacion(c, s):
     con_revisor = publicar(c, s, revisor=REVISOR)

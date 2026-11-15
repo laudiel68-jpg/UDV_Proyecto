@@ -58,6 +58,14 @@ function ocultarAvisos() {
   });
 }
 
+// "2026-11-15T16:41" -> "15/11/2026 16:41". Se arma a mano para mostrar la
+// hora tal como viene de la base, sin que el navegador la cambie de zona.
+function formatearFecha(iso) {
+  const [dia, hora] = iso.split("T");
+  const [a, m, d] = dia.split("-");
+  return `${d}/${m}/${a}${hora ? " " + hora.slice(0, 5) : ""}`;
+}
+
 function adaptarTarea(api) {
   return {
     id: api.id,
@@ -65,7 +73,9 @@ function adaptarTarea(api) {
     tipo: api.task_type || "",
     estado: api.status,
     instrucciones: api.instructions || "",
-    comentario: (api.comments || []).length ? api.comments[api.comments.length - 1].text : "",
+    // Observación de la última devolución (viene del historial de G3, no de
+    // los comentarios: un comentario del docente no es una observación).
+    devolucion: api.last_return && api.last_return.comment ? api.last_return : null,
     borrador: api.draft_comment || "",
     // Quién está viendo: el docente dueño ve los botones de entregar y el
     // revisor los de revisar. Los demás (coordinación, auditoría) solo leen.
@@ -99,6 +109,7 @@ function mostrarFormularioEntrega(tarea) {
   const etiquetaArchivo = document.querySelector('label[for="entregaArchivo"]');
   campoArchivo.style.display = tarea.requiereArchivo ? "block" : "none";
   if (etiquetaArchivo) etiquetaArchivo.style.display = tarea.requiereArchivo ? "block" : "none";
+  document.getElementById("entregaArchivoNota").style.display = tarea.requiereArchivo ? "block" : "none";
 
   document.getElementById("archivoInfo").textContent = !tarea.requiereArchivo
     ? "Esta tarea no requiere evidencia adjunta."
@@ -135,10 +146,12 @@ async function cargarDetalle() {
 
     const contComentario = document.getElementById("detComentario");
     contComentario.innerHTML = "";
-    if (tareaActual.comentario) {
+    if (tareaActual.estado === "returned" && tareaActual.devolucion) {
+      const d = tareaActual.devolucion;
       const aviso = document.createElement("div");
       aviso.className = "udv-alert udv-alert-danger";
-      aviso.textContent = `Observación del revisor: ${tareaActual.comentario}`;
+      const fecha = d.at ? ` (${formatearFecha(d.at)})` : "";
+      aviso.textContent = `Observación del revisor${fecha}: ${d.comment}`;
       contComentario.appendChild(aviso);
     }
 

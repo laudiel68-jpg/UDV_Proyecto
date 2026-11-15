@@ -121,6 +121,9 @@ def _construir_db() -> List[dict]:
         item["requiere_archivo"] = REQUIERE_ARCHIVO_POR_TIPO.get(item["task_type"], True)
         item["reviewer_id"] = 5  # en los datos de ejemplo el revisor designado es el usuario 5
         item["history"] = [{"action": "publish", "new_status": "assigned", "actor": "coordinacion"}]
+        item["last_return"] = None
+        if item["status"] == "returned" and item["comments"]:
+            item["last_return"] = {"comment": item["comments"][-1]["text"], "at": None, "actor": "revisor1"}
     return base
 
 

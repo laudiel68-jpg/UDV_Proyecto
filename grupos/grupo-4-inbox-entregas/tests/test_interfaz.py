@@ -159,3 +159,11 @@ def test_los_botones_dependen_de_quien_mira():
     js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
     assert 'revisor && tareaActual.estado === "submitted"' in js
     assert 'docente && tareaActual.estado === "assigned"' in js
+
+
+def test_la_observacion_sale_de_la_devolucion_y_no_de_los_comentarios():
+    """Antes se mostraba el último comentario como 'Observación del revisor': la
+    observación de G3 no llegaba y un comentario del docente salía como si fuera del revisor."""
+    js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
+    assert "api.last_return" in js
+    assert "api.comments[api.comments.length - 1].text" not in js

@@ -154,17 +154,30 @@ def fetch_detalle_asignacion(assignment_id: int) -> Optional[dict]:
             WHERE e.tarea_destinatario_id = :id AND a.eliminado_en IS NULL
         """), {"id": assignment_id}).mappings().all()
 
+        # Se ordena por id y no por fecha: la semilla de G1 y G3 no guardan
+        # las fechas en la misma zona horaria, y por fecha el orden sale mal.
         historial = sesion.execute(text("""
             SELECT estado_anterior, estado_nuevo, actor, comentario, creado_en
             FROM v_historial_tarea
             WHERE asignacion_id = :id
-            ORDER BY creado_en
+            ORDER BY transicion_id
         """), {"id": assignment_id}).mappings().all()
     finally:
         sesion.close()
 
     fecha = cabecera["fecha_limite"]
     due_at = fecha.isoformat() if isinstance(fecha, (date, datetime)) else None
+
+    def _iso(valor):
+        return valor.isoformat(timespec="minutes") if isinstance(valor, datetime) else None
+
+    # La observación de la última devolución. G3 la guarda en el historial de
+    # transiciones (tarea_transicion.comentario), no en la tabla comentario.
+    devoluciones = [h for h in historial if h["estado_nuevo"] == "returned"]
+    ultima_devolucion = None
+    if devoluciones:
+        d = devoluciones[-1]
+        ultima_devolucion = {"comment": d["comentario"], "at": _iso(d["creado_en"]), "actor": d["actor"]}
 
     return {
         "id": cabecera["asignacion_id"],
@@ -186,9 +199,12 @@ def fetch_detalle_asignacion(assignment_id: int) -> Optional[dict]:
                 "action": _ACCION_POR_TRANSICION.get((h["estado_anterior"], h["estado_nuevo"])),
                 "new_status": h["estado_nuevo"],
                 "actor": h["actor"],
+                "comment": h["comentario"],
+                "at": _iso(h["creado_en"]),
             }
             for h in historial
         ],
+        "last_return": ultima_devolucion,
     }
 
 

@@ -306,3 +306,11 @@ def test_el_detalle_dice_si_quien_mira_es_el_docente_o_el_revisor():
     assert cliente.get("/api/v1/assignments/1").json()["viewer"] == {"is_assignee": False, "is_reviewer": True}
     autenticar_como(9, roles=("auditor",))
     assert cliente.get("/api/v1/assignments/1").json()["viewer"] == {"is_assignee": False, "is_reviewer": False}
+
+
+def test_el_detalle_de_una_devuelta_trae_la_observacion():
+    autenticar_como(1)
+    d = cliente.get("/api/v1/assignments/3").json()
+    if d["status"] != "returned":
+        pytest.skip("En los datos de ejemplo la asignación 3 no está devuelta")
+    assert d["last_return"]["comment"] == "El monto no coincide. Verificar y reenviar."
