@@ -109,7 +109,7 @@ class ApiTests(unittest.TestCase):
                                                headers=self.h(uid), json=body or {})
         self.assert_error(act("start", self.ids["teachers"][1]), 403)
         self.assert_error(act("approve", t0), 403)
-        self.assert_error(act("submit", t0), 409)
+        self.assert_error(act("submit", t0), 409, "INVALID_TRANSITION")
         self.assertEqual(act("start", t0).json()["status"], "in_progress")
         self.assertEqual(act("submit", t0).json()["status"], "submitted")
         self.assertEqual(act("review", rev).json()["status"], "under_review")
@@ -142,33 +142,60 @@ class ApiTests(unittest.TestCase):
                          "published")
 
     def test_urgent_priority_is_422_with_field_detail(self):
-        err = self.assert_error(self.new_task(priority="urgent"), 422, "validation_error")
+        err = self.assert_error(self.new_task(priority="urgent"), 422, "VALIDATION_ERROR")
         self.assertEqual(err["details"][0]["field"], "priority")
         tid = self.new_task().json()["id"]
         patch = self.client.patch(f"{P}/tasks/{tid}", headers=self.h(self.ids["coord"]),
                                   json={"priority": "urgent"})
-        err = self.assert_error(patch, 422, "validation_error")
+        err = self.assert_error(patch, 422, "VALIDATION_ERROR")
         self.assertEqual(err["details"][0]["field"], "priority")
 
     # ------------------------------------------------------- formato de errores
     def test_error_format_401_403_404_409_422(self):
         c = self.client
-        self.assert_error(c.get(f"{P}/tasks"), 401, "unauthorized")
+        self.assert_error(c.get(f"{P}/tasks"), 401, "UNAUTHORIZED")
         self.assert_error(c.get(f"{P}/tasks", headers=self.h(self.ids["teachers"][0])),
-                          403, "forbidden")
+                          403, "FORBIDDEN")
         self.assert_error(c.get(f"{P}/tasks/9999", headers=self.h(self.ids["coord"])),
-                          404, "not_found")
+                          404, "NOT_FOUND")
         self.assert_error(c.post(f"{P}/assignments/9999/start",
-                                 headers=self.h(self.ids["teachers"][0])), 404, "not_found")
+                                 headers=self.h(self.ids["teachers"][0])), 404, "NOT_FOUND")
         tid = self.new_task_with_recipients()
         coord = self.h(self.ids["coord"])
         c.post(f"{P}/tasks/{tid}/publish", headers=coord)
-        self.assert_error(c.post(f"{P}/tasks/{tid}/publish", headers=coord), 409, "conflict")
+        self.assert_error(c.post(f"{P}/tasks/{tid}/publish", headers=coord), 409, "CONFLICT")
         self.assert_error(c.post(f"{P}/tasks", headers=coord, json={"title": "x"}),
-                          422, "validation_error")
-        self.assert_error(c.get(f"{P}/ruta-que-no-existe", headers=coord), 404, "not_found")
+                          422, "VALIDATION_ERROR")
+        self.assert_error(c.get(f"{P}/ruta-que-no-existe", headers=coord), 404, "NOT_FOUND")
 
     
+
+
+    # ------------------------------------------------------- hallazgo #9: paginación del contrato
+    def test_tasks_list_uses_contract_pagination(self):
+        self.new_task()
+        self.new_task()
+        r = self.client.get(f"{P}/tasks?page=1&per_page=1", headers=self.h(self.ids["coord"]))
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(set(body), {"page", "per_page", "total", "data"})
+        self.assertEqual((body["page"], body["per_page"], body["total"], len(body["data"])),
+                         (1, 1, 2, 1))
+
+    # ------------------------------------------------------- hallazgo #15: solo el revisor designado
+    def test_only_the_designated_reviewer_can_review_over_http(self):
+        c, coord = self.client, self.h(self.ids["coord"])
+        tid = self.new_task_with_recipients()
+        pub = c.post(f"{P}/tasks/{tid}/publish", headers=coord).json()
+        aid, t0 = pub["assignment_ids"][0], self.ids["teachers"][0]
+        for a in ("start", "submit"):
+            c.post(f"{P}/assignments/{aid}/{a}", headers=self.h(t0), json={})
+        other = self.ids.get("reviewer2")
+        if other is not None:
+            self.assert_error(c.post(f"{P}/assignments/{aid}/review", headers=self.h(other),
+                                     json={}), 403, "FORBIDDEN")
+        ok = c.post(f"{P}/assignments/{aid}/review", headers=self.h(self.ids["reviewer"]), json={})
+        self.assertEqual(ok.json()["status"], "under_review")
 
 
 if __name__ == "__main__":
