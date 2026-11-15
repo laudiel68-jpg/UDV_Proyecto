@@ -167,3 +167,23 @@ def test_la_observacion_sale_de_la_devolucion_y_no_de_los_comentarios():
     js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
     assert "api.last_return" in js
     assert "api.comments[api.comments.length - 1].text" not in js
+
+
+def test_el_detalle_muestra_los_archivos_y_permite_descargarlos():
+    """El revisor tiene que ver la evidencia que entregó el docente."""
+    html = (STATIC / "detalle.html").read_text(encoding="utf-8")
+    js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
+    assert 'id="listaArchivos"' in html
+    assert "mostrarArchivos(tareaActual.archivos)" in js
+    # la descarga de G2 pide el token: tiene que ir con fetch y Sesion.encabezados()
+    assert "${API_BASE}/files/${encodeURIComponent(archivo.file_id)}" in js
+    assert "URL.createObjectURL" in js
+
+
+def test_aprobar_envia_la_observacion_si_se_escribio():
+    """Antes Aprobar no mandaba el texto del cuadro de observación y se perdía sin avisar."""
+    js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
+    assert '"Aprobar", "btn-udv-primary", () => aprobar(tareaActual)' in js
+    inicio = js.index("async function aprobar(")
+    assert 'getElementById("obs")' in js[inicio:inicio + 400]
+    assert "api.last_approval" in js

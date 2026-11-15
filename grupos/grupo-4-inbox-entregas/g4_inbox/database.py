@@ -148,10 +148,13 @@ def fetch_detalle_asignacion(assignment_id: int) -> Optional[dict]:
         """), {"id": assignment_id}).mappings().all()
 
         archivos = sesion.execute(text("""
-            SELECT a.id AS file_id, a.nombre_original AS name
+            SELECT a.id AS file_id, a.nombre_original AS name, a.tipo_mime AS mime,
+                   a.tamano_bytes AS size, a.creado_en AS uploaded_at,
+                   e.numero_intento AS attempt
             FROM archivo a
             JOIN entrega e ON e.id = a.entrega_id
             WHERE e.tarea_destinatario_id = :id AND a.eliminado_en IS NULL
+            ORDER BY e.numero_intento, a.id
         """), {"id": assignment_id}).mappings().all()
 
         # Se ordena por id y no por fecha: la semilla de G1 y G3 no guardan
@@ -171,13 +174,18 @@ def fetch_detalle_asignacion(assignment_id: int) -> Optional[dict]:
     def _iso(valor):
         return valor.isoformat(timespec="minutes") if isinstance(valor, datetime) else None
 
-    # La observación de la última devolución. G3 la guarda en el historial de
-    # transiciones (tarea_transicion.comentario), no en la tabla comentario.
-    devoluciones = [h for h in historial if h["estado_nuevo"] == "returned"]
-    ultima_devolucion = None
-    if devoluciones:
-        d = devoluciones[-1]
-        ultima_devolucion = {"comment": d["comentario"], "at": _iso(d["creado_en"]), "actor": d["actor"]}
+    # El comentario de la última devolución o aprobación. G3 lo guarda en el
+    # historial de transiciones (tarea_transicion.comentario), no en la tabla
+    # comentario.
+    def _ultima(estado):
+        filas = [h for h in historial if h["estado_nuevo"] == estado]
+        if not filas:
+            return None
+        h = filas[-1]
+        return {"comment": h["comentario"], "at": _iso(h["creado_en"]), "actor": h["actor"]}
+
+    ultima_devolucion = _ultima("returned")
+    ultima_aprobacion = _ultima("approved")
 
     return {
         "id": cabecera["asignacion_id"],
@@ -193,7 +201,10 @@ def fetch_detalle_asignacion(assignment_id: int) -> Optional[dict]:
         "program_version_id": cabecera["programa_version_id"],
         "draft_comment": borrador["contenido_texto"] if borrador else None,
         "comments": [{"author": str(c["author"]), "text": c["text"]} for c in comentarios],
-        "files": [{"file_id": str(f["file_id"]), "name": f["name"]} for f in archivos],
+        # Con sus datos, para que el revisor vea qué se entregó en cada intento.
+        "files": [{"file_id": str(f["file_id"]), "name": f["name"], "mime": f["mime"],
+                   "size": f["size"], "uploaded_at": _iso(f["uploaded_at"]),
+                   "attempt": f["attempt"]} for f in archivos],
         "history": [
             {
                 "action": _ACCION_POR_TRANSICION.get((h["estado_anterior"], h["estado_nuevo"])),
@@ -205,6 +216,7 @@ def fetch_detalle_asignacion(assignment_id: int) -> Optional[dict]:
             for h in historial
         ],
         "last_return": ultima_devolucion,
+        "last_approval": ultima_aprobacion,
     }
 
 

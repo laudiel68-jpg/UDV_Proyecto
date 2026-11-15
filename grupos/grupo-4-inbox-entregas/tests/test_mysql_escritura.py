@@ -193,8 +193,13 @@ def test_reenvio_con_archivo_nuevo_crea_un_segundo_intento(c, s):
     # el reenvío conserva la evidencia anterior en su intento: nunca se borra ni se mueve
     assert _consulta("SELECT entrega_id FROM archivo WHERE id = :f", f=primero) == [(entregas[1],)]
     assert _consulta("SELECT entrega_id FROM archivo WHERE id = :f", f=segundo) == [(entregas[2],)]
-    nombres = [f["name"] for f in c.get(f"/api/v1/assignments/{a}", headers=s["docente1"]).json()["files"]]
-    assert sorted(nombres) == ["factura_v1.pdf", "factura_v2.pdf"]
+    archivos = c.get(f"/api/v1/assignments/{a}", headers=s["revisor"]).json()["files"]
+    assert [(f["name"], f["attempt"], f["mime"]) for f in archivos] == [
+        ("factura_v1.pdf", 1, "application/pdf"), ("factura_v2.pdf", 2, "application/pdf")]
+    assert all(f["size"] > 0 for f in archivos)
+    # el revisor puede descargar la evidencia (lo valida G2)
+    r = c.get(f"/api/v1/files/{archivos[1]['file_id']}", headers=s["revisor"])
+    assert r.status_code == 200 and r.content.startswith(b"%PDF")
     # la entrega que creó G4 lleva el texto del borrador (G1 no deja agregarlo después)
     assert _consulta("SELECT contenido_texto FROM entrega WHERE id = :e", e=entregas[2]) == [("Corregí el monto",)]
 
@@ -245,6 +250,17 @@ def test_el_docente_ve_la_observacion_y_la_fecha_de_la_devolucion(c, s):
     # el historial sale en el orden en que pasó, aunque las fechas vengan en zonas distintas
     assert [h["new_status"] for h in d["history"]] == [
         "assigned", "in_progress", "submitted", "under_review", "returned"]
+
+
+def test_el_comentario_al_aprobar_se_guarda_y_lo_ve_el_docente(c, s):
+    a = publicar(c, s, tipo=1)
+    accion(c, s["docente1"], a, "start")
+    accion(c, s["docente1"], a, "submit")
+    accion(c, s["revisor"], a, "review")
+    accion(c, s["revisor"], a, "approve", "Muy completo, gracias")
+    d = c.get(f"/api/v1/assignments/{a}", headers=s["docente1"]).json()
+    assert d["status"] == "approved"
+    assert d["last_approval"]["comment"] == "Muy completo, gracias" and d["last_approval"]["at"]
 
 
 # ------------------------------------------------------------ revisor designado

@@ -45,6 +45,66 @@ async function subirArchivo(archivo) {
   return datos.file_id;
 }
 
+// GET /api/v1/files/{id} de G2 pide el token en el encabezado, y un enlace
+// normal no lo manda: se descarga con fetch y luego se le pasa al navegador.
+async function descargarArchivo(archivo) {
+  ocultarAvisos();
+  try {
+    const respuesta = await fetch(`${API_BASE}/files/${encodeURIComponent(archivo.file_id)}`, {
+      headers: Sesion.encabezados(),
+    });
+    if (!respuesta.ok) {
+      const datos = await respuesta.json().catch(() => ({}));
+      throw new Error(Sesion.mensajeDeError(datos, respuesta.status));
+    }
+    const url = URL.createObjectURL(await respuesta.blob());
+    const enlace = document.createElement("a");
+    enlace.href = url;
+    enlace.download = archivo.name;
+    document.body.appendChild(enlace);
+    enlace.click();
+    enlace.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    mostrarError(`No se pudo descargar ${archivo.name}: ${error.message}`);
+  }
+}
+
+function textoTamano(bytes) {
+  if (bytes == null) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Lista de archivos, del intento más reciente al más antiguo. El reenvío no
+// borra la evidencia anterior: se sigue viendo con su número de intento.
+function mostrarArchivos(archivos) {
+  const caja = document.getElementById("detArchivos");
+  const lista = document.getElementById("listaArchivos");
+  lista.innerHTML = "";
+  caja.style.display = archivos.length ? "block" : "none";
+  [...archivos].reverse().forEach((archivo) => {
+    const fila = document.createElement("li");
+    fila.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;padding:.5rem 0;border-bottom:1px solid #E5E7EB;";
+    const datos = document.createElement("span");
+    const partes = [
+      archivo.attempt ? `Intento ${archivo.attempt}` : null,
+      (archivo.mime || "").split("/").pop().toUpperCase() || null,
+      textoTamano(archivo.size) || null,
+      // La fecha de subida no se muestra: G2 la guarda en UTC y el resto en la
+      // hora del servidor; con el docker saldría con 6 horas de diferencia.
+    ].filter(Boolean);
+    const nombre = document.createElement("strong");
+    nombre.textContent = archivo.name;
+    datos.appendChild(nombre);
+    if (partes.length) datos.appendChild(document.createTextNode(` · ${partes.join(" · ")}`));
+    fila.appendChild(datos);
+    agregarBoton(fila, "Descargar", "btn-udv-dark btn-udv-sm", () => descargarArchivo(archivo));
+    lista.appendChild(fila);
+  });
+}
+
 function mostrarError(mensaje, id = "avisoError") {
   const el = document.getElementById(id);
   el.textContent = mensaje;
@@ -76,12 +136,14 @@ function adaptarTarea(api) {
     // Observación de la última devolución (viene del historial de G3, no de
     // los comentarios: un comentario del docente no es una observación).
     devolucion: api.last_return && api.last_return.comment ? api.last_return : null,
+    aprobacion: api.last_approval && api.last_approval.comment ? api.last_approval : null,
     borrador: api.draft_comment || "",
     // Quién está viendo: el docente dueño ve los botones de entregar y el
     // revisor los de revisar. Los demás (coordinación, auditoría) solo leen.
     esDestinatario: Boolean(api.viewer && api.viewer.is_assignee),
     esRevisor: Boolean(api.viewer && api.viewer.is_reviewer),
     archivo: (api.files || []).length ? api.files[api.files.length - 1].name : null,
+    archivos: api.files || [],
     // Por defecto true: si el backend no manda este campo (no debería
     // pasar), es más seguro seguir pidiendo evidencia que dejar de pedirla.
     requiereArchivo: api.requiere_archivo !== false,
@@ -144,6 +206,8 @@ async function cargarDetalle() {
     document.getElementById("obs").value = "";
     document.getElementById("formEntrega").style.display = "none";
 
+    mostrarArchivos(tareaActual.archivos);
+
     const contComentario = document.getElementById("detComentario");
     contComentario.innerHTML = "";
     if (tareaActual.estado === "returned" && tareaActual.devolucion) {
@@ -152,6 +216,14 @@ async function cargarDetalle() {
       aviso.className = "udv-alert udv-alert-danger";
       const fecha = d.at ? ` (${formatearFecha(d.at)})` : "";
       aviso.textContent = `Observación del revisor${fecha}: ${d.comment}`;
+      contComentario.appendChild(aviso);
+    }
+    if (tareaActual.estado === "approved" && tareaActual.aprobacion) {
+      const d = tareaActual.aprobacion;
+      const aviso = document.createElement("div");
+      aviso.className = "udv-alert udv-alert-success";
+      const fecha = d.at ? ` (${formatearFecha(d.at)})` : "";
+      aviso.textContent = `Comentario del revisor al aprobar${fecha}: ${d.comment}`;
       contComentario.appendChild(aviso);
     }
 
@@ -170,7 +242,7 @@ async function cargarDetalle() {
     } else if (docente && tareaActual.estado === "submitted") {
       botones.textContent = "Tu entrega está en espera de revisión.";
     } else if (revisor && tareaActual.estado === "under_review") {
-      agregarBoton(botones, "Aprobar", "btn-udv-primary", () => transicion(tareaActual, "approve"));
+      agregarBoton(botones, "Aprobar", "btn-udv-primary", () => aprobar(tareaActual));
       agregarBoton(botones, "Devolver", "btn-udv-gold", () => devolver(tareaActual));
       document.getElementById("obsGroup").style.display = "block";
     } else {
@@ -242,6 +314,21 @@ async function transicion(tarea, accion) {
   try {
     await apiFetch(`/assignments/${tarea.id}/${accion}`, {
       method: "POST",
+    });
+    await cargarDetalle();
+  } catch (error) {
+    mostrarError(error.message);
+  }
+}
+
+// La observación es opcional al aprobar, pero si el revisor la escribió se
+// envía: queda en el historial de G3 y el docente la ve en el detalle.
+async function aprobar(tarea) {
+  const comment = document.getElementById("obs").value.trim();
+  try {
+    await apiFetch(`/assignments/${tarea.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ comment: comment || null }),
     });
     await cargarDetalle();
   } catch (error) {
