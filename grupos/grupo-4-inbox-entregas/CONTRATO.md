@@ -74,6 +74,39 @@ tabla de transiciones en el CONTRATO.md del G3.
 - El revisor solo actúa sobre asignaciones asignadas o permitidas.
 - Los archivos se cargan por el servicio del G2, nunca por rutas propias.
 
+## 4.1 Comentarios, borrador, archivos y entrega
+
+Acuerdo con el PM del 13 de noviembre (aplica a G3 y G4).
+
+- `POST /assignments/{id}/comments` guarda en la tabla `comentario`.
+- `PUT /assignments/{id}/submission-draft` guarda en `entrega_borrador` (una
+  fila por asignación; se reemplaza). Si la asignación ya no está pendiente
+  (`assigned`, `in_progress` o `returned`), responde 409.
+- `POST /assignments/{id}/files` recibe el `file_id` que devolvió
+  `POST /api/v1/files` de G2 y hace esto en una sola transacción:
+  1. El archivo debe existir en `archivo`, con `eliminado_en IS NULL` y
+     subido por el mismo usuario. Si no, 404.
+  2. La asignación debe estar pendiente. Si no, 409.
+  3. Busca el intento actual. Si no hay, crea la fila de `entrega` con
+     `numero_intento = MAX + 1`. Si ya hay, la usa.
+  4. `UPDATE archivo SET entrega_id = <entrega del intento actual>`.
+- Intento actual: la última fila de `entrega` de esa asignación que no tenga
+  una transición `submitted` posterior en `tarea_transicion`. Nunca se crean
+  dos intentos para un mismo envío.
+- Cómo lo aplica G4: cuenta envíos en vez de comparar fechas. Cada
+  `submitted` (submit o resubmit) cierra un intento, así que el intento N
+  sigue abierto mientras haya menos de N envíos. Da lo mismo que la regla
+  del PM sin depender de la zona horaria.
+- G3 sí compara fechas (`tarea_transicion.creado_en >= entrega.entregado_en`).
+  Para que eso funcione, G4 no fija `time_zone` y escribe en la zona del
+  servidor, igual que G3. Con el docker-compose (`TZ: America/Guatemala`), si
+  uno escribe en UTC y el otro no, hay 6 horas de diferencia.
+- La entrega que crea G4 lleva `contenido_texto` y `programa_version_id` del
+  borrador, igual que cuando la crea G3, porque G1 no deja modificarla
+  después. La pantalla guarda el borrador antes de subir el archivo.
+- El revisor solo ve y comenta las asignaciones de las tareas donde es el
+  revisor designado (`tarea.revisor_id`). Coordinación y admin ven todas.
+
 ## 5. Definición de HECHO (checklist de cada PR)
 
 - [ ] Corre desde cero con `pip install -r requirements.txt` (raíz) en una
@@ -95,3 +128,4 @@ tabla de transiciones en el CONTRATO.md del G3.
 |---|---|---|---|
 | 2026-09-26 | Versión inicial | — | PM |
 | 2026-09-28 | Jerarquía de fuentes; prefijo `/api/v1`; **nuevo** `PUT /assignments/{id}/submission-draft` (el .docx exige borradores y no había ruta); reparto de responsabilidades con el G3; `program_version_id` con el G5; reglas del .docx que faltaban; checklist con pruebas y OpenAPI | PM | PM |
+| 2026-11-14 | Sección 4.1: comentarios y borrador en la base, validación de archivos, fila de entrega por intento, revisor designado | PM y QA | Pendiente |

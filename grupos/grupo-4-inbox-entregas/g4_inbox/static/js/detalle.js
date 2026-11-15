@@ -21,15 +21,28 @@ function claseBadge(estado) {
 async function apiFetch(ruta, opciones = {}) {
   const respuesta = await fetch(`${API_BASE}${ruta}`, {
     ...opciones,
-    headers: {"Content-Type": "application/json", ...Sesion.encabezados(), ...(opciones.headers || {})},
+    headers: { "Content-Type": "application/json", ...Sesion.encabezados(), ...(opciones.headers || {}) },
   });
   const tipo = respuesta.headers.get("content-type") || "";
   const datos = tipo.includes("application/json") ? await respuesta.json() : await respuesta.text();
-  if (!respuesta.ok) {
-    const detalle = datos && datos.detail ? datos.detail : `Error HTTP ${respuesta.status}`;
-    throw new Error(Array.isArray(detalle) ? detalle.map((x) => x.msg || JSON.stringify(x)).join(", ") : detalle);
-  }
+  if (!respuesta.ok) throw new Error(Sesion.mensajeDeError(datos, respuesta.status));
   return datos;
+}
+
+// Sube el archivo al servicio de archivos de G2 (POST /api/v1/files) y
+// devuelve el id que G2 le dio en la tabla archivo. Va con FormData y SIN
+// Content-Type: el navegador lo pone solo, con el separador del formulario.
+async function subirArchivo(archivo) {
+  const fd = new FormData();
+  fd.append("file", archivo);
+  const respuesta = await fetch(`${API_BASE}/files`, {
+    method: "POST",
+    headers: Sesion.encabezados(),
+    body: fd,
+  });
+  const datos = await respuesta.json().catch(() => ({}));
+  if (!respuesta.ok) throw new Error(Sesion.mensajeDeError(datos, respuesta.status));
+  return datos.file_id;
 }
 
 function mostrarError(mensaje, id = "avisoError") {
@@ -54,6 +67,10 @@ function adaptarTarea(api) {
     instrucciones: api.instructions || "",
     comentario: (api.comments || []).length ? api.comments[api.comments.length - 1].text : "",
     borrador: api.draft_comment || "",
+    // Quién está viendo: el docente dueño ve los botones de entregar y el
+    // revisor los de revisar. Los demás (coordinación, auditoría) solo leen.
+    esDestinatario: Boolean(api.viewer && api.viewer.is_assignee),
+    esRevisor: Boolean(api.viewer && api.viewer.is_reviewer),
     archivo: (api.files || []).length ? api.files[api.files.length - 1].name : null,
     // Por defecto true: si el backend no manda este campo (no debería
     // pasar), es más seguro seguir pidiendo evidencia que dejar de pedirla.
@@ -90,7 +107,8 @@ function mostrarFormularioEntrega(tarea) {
       : "Selecciona la evidencia que vas a registrar.";
   const botones = document.getElementById("entregaBotones");
   botones.innerHTML = "";
-  agregarBoton(botones, "Guardar borrador", "btn-udv-outline", () => guardarBorrador(tarea));
+  // el estilo "outline" de udv.css es blanco, para fondos oscuros: aquí no se vería
+  agregarBoton(botones, "Guardar borrador", "btn-udv-dark", () => guardarBorrador(tarea));
   agregarBoton(botones, tarea.estado === "returned" ? "Reenviar" : "Entregar", "btn-udv-primary", () => confirmarEntrega(tarea));
 }
 
@@ -124,17 +142,21 @@ async function cargarDetalle() {
       contComentario.appendChild(aviso);
     }
 
-    // Las acciones visibles salen de lo que el estado permite — nunca
-    // se inventa un botón que la tabla de transiciones no autorice.
+    // Los botones dependen del estado Y de quién mira: al docente nunca se
+    // le muestra "Tomar para revisar", ni al revisor "Entregar".
     const botones = document.getElementById("detBotones");
     botones.innerHTML = "";
-    if (tareaActual.estado === "assigned") {
+    const docente = tareaActual.esDestinatario;
+    const revisor = tareaActual.esRevisor;
+    if (docente && tareaActual.estado === "assigned") {
       agregarBoton(botones, "Iniciar tarea", "btn-udv-primary", () => transicion(tareaActual, "start"));
-    } else if (tareaActual.estado === "in_progress" || tareaActual.estado === "returned") {
+    } else if (docente && (tareaActual.estado === "in_progress" || tareaActual.estado === "returned")) {
       mostrarFormularioEntrega(tareaActual);
-    } else if (tareaActual.estado === "submitted") {
+    } else if (revisor && tareaActual.estado === "submitted") {
       agregarBoton(botones, "Tomar para revisar", "btn-udv-primary", () => transicion(tareaActual, "review"));
-    } else if (tareaActual.estado === "under_review") {
+    } else if (docente && tareaActual.estado === "submitted") {
+      botones.textContent = "Tu entrega está en espera de revisión.";
+    } else if (revisor && tareaActual.estado === "under_review") {
       agregarBoton(botones, "Aprobar", "btn-udv-primary", () => transicion(tareaActual, "approve"));
       agregarBoton(botones, "Devolver", "btn-udv-gold", () => devolver(tareaActual));
       document.getElementById("obsGroup").style.display = "block";
@@ -164,8 +186,9 @@ async function guardarBorrador(tarea) {
   }
 }
 
-// Registra el archivo en el endpoint de vinculación y luego hace submit/resubmit.
-// El backend solo guarda el nombre/id del archivo, no recibe los bytes.
+// Orden de la entrega: 1) guarda el borrador, para no perder lo escrito si
+// algo falla; 2) sube el archivo a G2; 3) lo vincula a la asignación con el
+// id que devolvió G2; 4) pide a G3 el submit o resubmit.
 async function confirmarEntrega(tarea) {
   const comentario = document.getElementById("entregaComentario").value.trim();
   const archivoInput = document.getElementById("entregaArchivo");
@@ -183,9 +206,10 @@ async function confirmarEntrega(tarea) {
       body: JSON.stringify({ comment: comentario }),
     });
     if (archivoNuevo) {
+      const idArchivo = await subirArchivo(archivoNuevo);
       await apiFetch(`/assignments/${tarea.id}/files`, {
         method: "POST",
-        body: JSON.stringify({ file_id: `demo-${tarea.id}-${Date.now()}`, name: archivoNuevo.name }),
+        body: JSON.stringify({ file_id: String(idArchivo), name: archivoNuevo.name }),
       });
     }
     const accion = tarea.estado === "returned" ? "resubmit" : "submit";
