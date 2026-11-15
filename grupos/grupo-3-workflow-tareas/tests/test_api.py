@@ -143,12 +143,12 @@ class ApiTests(unittest.TestCase):
 
     def test_urgent_priority_is_422_with_field_detail(self):
         err = self.assert_error(self.new_task(priority="urgent"), 422, "VALIDATION_ERROR")
-        self.assertEqual(err["details"][0]["field"], "priority")
+        self.assertIn("priority", err["details"])
         tid = self.new_task().json()["id"]
         patch = self.client.patch(f"{P}/tasks/{tid}", headers=self.h(self.ids["coord"]),
                                   json={"priority": "urgent"})
         err = self.assert_error(patch, 422, "VALIDATION_ERROR")
-        self.assertEqual(err["details"][0]["field"], "priority")
+        self.assertIn("priority", err["details"])
 
     # ------------------------------------------------------- formato de errores
     def test_error_format_401_403_404_409_422(self):

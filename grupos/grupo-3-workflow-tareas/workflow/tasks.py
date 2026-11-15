@@ -239,9 +239,13 @@ def _validate_fields(conn, data):
         if data["priority"] not in valid:
             raise ValidationFailed(
                 "priority inválida",
-                details=[{"field": "priority",
-                          "message": "Prioridad no registrada en el catálogo",
-                          "valid": valid}])
+                details={
+                    "priority": {
+                        "message": "Prioridad no registrada en el catálogo",
+                        "valid": valid
+                    }
+                }
+            )
     if "due_date" in data:
         data["due_date"] = _parse_due_date(data["due_date"])
     if "type_id" in data:
