@@ -1,8 +1,8 @@
 """Reglas para saber en qué paso va cada versión del programa.
 
 Los estados indican qué sigue: ``draft`` es un borrador editable; ``submitted``
-espera a Coordinación académica; ``under_review`` está en revisión; ``returned``
-vuelve al docente para corregirlo; ``approved`` espera a Decanatura;
+espera a Coordinación o revisión; ``under_review`` está en revisión; ``returned``
+vuelve al docente para corregirlo; ``approved`` espera a Dirección;
 ``authorized`` es la versión vigente; y ``superseded`` ya fue reemplazada.
 
 El recorrido normal es ``draft`` o ``returned`` -> ``submitted`` ->

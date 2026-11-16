@@ -48,12 +48,12 @@ Transiciones válidas de una versión de programa:
 
 | Estado actual | Acción | Estado nuevo | Actor |
 |---|---|---|---|
-| draft | submit | submitted | Elaborador (docente) |
-| submitted | review | under_review | Revisor |
-| under_review | return | returned | Revisor |
-| returned | submit | submitted | Elaborador (docente) |
-| under_review | approve | approved | Revisor |
-| approved | authorize | authorized | Autoridad |
+| draft | submit | submitted | Elaborador (docente responsable) |
+| submitted | review | under_review | Revisor o Coordinación |
+| under_review | return | returned | Revisor o Coordinación |
+| returned | submit | submitted | Elaborador (docente responsable) |
+| under_review | approve | approved | Revisor o Coordinación |
+| approved | authorize | authorized | `authority` |
 | authorized | (otra versión se autoriza) | superseded | Sistema |
 
 Una transición fuera de esta tabla responde 409 sin modificar datos.
@@ -67,12 +67,24 @@ integración con el mecanismo compartido de eventos.
 - El programa lógico y sus versiones son entidades distintas.
 - Editar solo está permitido en `draft` o `returned`; enviar congela la
   edición hasta una devolución.
+- La autorización usa exclusivamente códigos oficiales de rol de G1. El docente
+  responsable elabora, edita y envía únicamente su propia versión; Coordinación
+  también puede elaborar y enviar. Coordinación y `reviewer` pueden revisar,
+  devolver y aprobar; `authority` autoriza. El backend valida estos códigos de
+  rol directamente, sin depender de permisos derivados de G1.
 - Solo UNA versión autorizada y vigente por curso/sede/período.
 - Una versión autorizada es INMUTABLE: los cambios van en un borrador nuevo
   (clonación), jamás editando la vigente.
 - Autorizar una versión nueva marca la anterior como `superseded`; no la
   elimina y sigue consultable.
 - El número de versión lo asigna el servidor dentro de una transacción.
+- El docente responsable debe tener una asignación activa en `docente_curso`
+  para el mismo curso, período y sede. Crear un programa desde coordinación
+  sin indicar docente no asigna automáticamente a coordinación como docente.
+  Solo los gestores pueden cambiar al docente responsable de una versión.
+- Abrir versiones nuevas corresponde a `admin`, `coordinator` y `reviewer`.
+  El docente puede crear el primer programa y borrador, siempre asignándose
+  como responsable y con una asignación activa en G1.
 - Guardar una sección no sobrescribe las demás; las filas mantienen su orden.
 - La suma de ponderaciones de evaluación se valida (100%) cuando ese sea el
   esquema.
@@ -103,3 +115,4 @@ integración con el mecanismo compartido de eventos.
 |---|---|---|---|
 | 2026-09-26 | Versión inicial | — | PM |
 | 2026-09-28 | Jerarquía de fuentes; prefijo `/api/v1`; tabla de endpoints completada con las rutas del .docx; **nuevo** `POST /program-versions/{id}/review` (el estado `under_review` no tenía acción); tabla de transiciones de programa; evento requerido; reglas de versionado del .docx que faltaban; checklist con pruebas y OpenAPI | PM | PM |
+| 2026-11-13 | Docente elabora y envía; coordinación y revisor aprueban; dirección autoriza | Decisión del PM con el ingeniero | PM |

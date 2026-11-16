@@ -33,7 +33,7 @@ def paginate(page, page_size):
     if not isinstance(page, int) or page < 1:
         raise ValidationFailed("page debe ser un entero >= 1")
     if not isinstance(page_size, int) or not 1 <= page_size <= 100:
-        raise ValidationFailed("page_size debe estar entre 1 y 100")
+        raise ValidationFailed("per_page debe estar entre 1 y 100")
     return page_size, (page - 1) * page_size
 
 
@@ -42,8 +42,8 @@ def _paged(conn, select, frm, params, order, page, page_size):
     total = conn.execute(f"SELECT COUNT(*) {frm}", params).fetchone()[0]
     rows = conn.execute(f"{select} {frm} ORDER BY {order} LIMIT ? OFFSET ?",
                         [*params, limit, offset]).fetchall()
-    return {"items": [dict(r) for r in rows], "page": page,
-            "page_size": page_size, "total": total}
+    return {"data": [dict(r) for r in rows], "page": page,
+            "per_page": page_size, "total": total}
 
 
 # ---- G1: una tarea con los nombres y estados de siempre -------------------------------
@@ -230,9 +230,18 @@ def _validate_fields(conn, data):
     mysql = _is_mysql(conn)
     if "title" in data and not (data["title"] or "").strip():
         raise ValidationFailed("title no puede estar vacío", details={"field": "title"})
-    if "priority" in data and data["priority"] not in PRIORITIES:
-        raise ValidationFailed("priority inválida",
-                               details={"field": "priority", "valid": list(PRIORITIES)})
+    if "priority" in data:
+        if mysql:
+            rows = conn.execute("SELECT codigo FROM prioridad_tarea").fetchall()
+            valid = [row[0] for row in rows]
+        else:
+            valid = list(PRIORITIES)
+        if data["priority"] not in valid:
+            raise ValidationFailed(
+                "priority inválida",
+                details=[{"field": "priority",
+                          "message": "Prioridad no registrada en el catálogo",
+                          "valid": valid}])
     if "due_date" in data:
         data["due_date"] = _parse_due_date(data["due_date"])
     if "type_id" in data:
@@ -310,7 +319,7 @@ def _list_tasks_mysql(conn, actor, status, page, page_size):
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     res = _paged(conn, f"SELECT {_TASK_COLS_MYSQL}", f"{_TASK_FROM_MYSQL} {clause}", params,
                  "t.id DESC", page, page_size)
-    res["items"] = [_task_out(item, conn) for item in res["items"]]
+    res["data"] = [_task_out(item, conn) for item in res["data"]]
     return res
 
 
@@ -334,7 +343,7 @@ def list_tasks(conn, actor, status=None, page=1, page_size=20):
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     res = _paged(conn, "SELECT t.*", f"FROM tasks t {clause}", params, "t.id DESC",
                  page, page_size)
-    for item in res["items"]:
+    for item in res["data"]:
         item["recipient_rule"] = (json.loads(item["recipient_rule"])
                                   if item["recipient_rule"] else None)
     return res
@@ -349,7 +358,7 @@ def update_task(conn, actor, task_id, changes):
         if not _can_manage(actor, task):
             raise Forbidden("No eres el coordinador autorizado de esta tarea")
         if task["status"] != "draft":
-            raise Conflict("Solo se puede editar una tarea en borrador", code="not_draft")
+            raise Conflict("Solo se puede editar una tarea en borrador", code="NOT_DRAFT")
         changes = dict(changes)
         _validate_fields(conn, changes)
         if changes and _is_mysql(conn):
@@ -503,7 +512,7 @@ def set_recipients(conn, actor, task_id, rule):
         if not _can_manage(actor, task):
             raise Forbidden("No eres el coordinador autorizado de esta tarea")
         if task["status"] != "draft":
-            raise Conflict("Los destinatarios solo se editan en borrador", code="not_draft")
+            raise Conflict("Los destinatarios solo se editan en borrador", code="NOT_DRAFT")
         if _is_mysql(conn):
             alcance, sede_id, unidad_id, user_ids, _norm = _normalize_rule_mysql(conn, rule)
             eligible = _eligible_mysql(conn, alcance, sede_id, unidad_id, user_ids)
@@ -536,7 +545,7 @@ def _publish_mysql(conn, actor, task_id):
         rule = transitions.get_rule(task["flow"], "draft", "publish")
         transitions.authorize(rule, actor, task)
         if task["status"] != "draft":
-            raise Conflict("La tarea ya fue publicada o cancelada", code="conflict")
+            raise Conflict("La tarea ya fue publicada o cancelada", code="CONFLICT")
         if task["alcance"] not in ("todos", "sede", "unidad", "seleccion"):
             raise ValidationFailed("Configura los destinatarios antes de publicar")
         _call_proc(conn, "sp_publicar_tarea", (task_id, actor["id"]))
@@ -556,7 +565,7 @@ def publish_task(conn, actor, task_id):
         rule = transitions.get_rule(task["flow"], "draft", "publish")
         transitions.authorize(rule, actor, task)
         if task["status"] != "draft":
-            raise Conflict("La tarea ya fue publicada o cancelada", code="conflict")
+            raise Conflict("La tarea ya fue publicada o cancelada", code="CONFLICT")
         if not task["recipient_rule"]:
             raise ValidationFailed("Configura los destinatarios antes de publicar")
         ids = resolve_recipients(conn, json.loads(task["recipient_rule"]))
@@ -568,7 +577,7 @@ def publish_task(conn, actor, task_id):
             "UPDATE tasks SET status = 'published', published_at = ?, updated_at = ?"
             " WHERE id = ? AND status = 'draft'", (now, now, task_id))
         if cur.rowcount != 1:
-            raise Conflict("La tarea ya fue publicada", code="conflict")
+            raise Conflict("La tarea ya fue publicada", code="CONFLICT")
 
         created = []
         for user_id in ids:
@@ -605,7 +614,7 @@ def cancel_task(conn, actor, task_id, reason=None):
         task = _load_task(conn, task_id)
         transitions.authorize(transitions.get_rule(task["flow"], "draft", "cancel"), actor, task)
         if task["status"] == "cancelled":
-            raise Conflict("La tarea ya está cancelada", code="already_cancelled")
+            raise Conflict("La tarea ya está cancelada", code="ALREADY_CANCELLED")
 
         cancelled, skipped = [], []
         if task["status"] == "published":
@@ -621,7 +630,7 @@ def cancel_task(conn, actor, task_id, reason=None):
                        for r in rows if r["status"] not in ("assigned", "cancelled")]
             if not cancellable and skipped:
                 raise Conflict("Ninguna asignación puede cancelarse en su estado actual",
-                               details={"skipped": skipped}, code="nothing_to_cancel")
+                               details={"skipped": skipped}, code="NOTHING_TO_CANCEL")
             for aid in cancellable:
                 transitions.perform(conn, aid, "cancel", actor, reason)
                 cancelled.append(aid)

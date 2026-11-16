@@ -83,6 +83,14 @@ asignaciones cuando se cancela una tarea publicada.
 - Una transición fuera de la tabla responde **409 sin modificar datos**.
 - Toda devolución exige comentario: devolver sin observación responde **422**.
 - Un usuario que no es destinatario no puede iniciar ni entregar (403).
+- `submit` / `resubmit` en un tipo de tarea con `requiere_archivo = 1` sin ningún
+  archivo vinculado al intento actual responden **422** y no modifican datos.
+- Tabla `entrega` (decisión del PM, 13-nov-2026; aplica a G3 y G4). **Intento
+  actual** = la última fila de `entrega` de la asignación que no tiene una
+  transición `submitted` posterior en `tarea_transicion`. G4 crea esa fila (y
+  enlaza `archivo.entrega_id`) al vincular el archivo. En `submit` / `resubmit`,
+  G3 usa el intento actual y solo si no existe lo crea (`numero_intento = MAX + 1`,
+  con el texto del borrador); nunca se crean dos intentos para un mismo envío.
 - Fechas límite y prioridad se copian o resuelven consistentemente en la
   asignación.
 - Cada transición corre dentro de una transacción de base de datos.
@@ -109,3 +117,4 @@ asignaciones cuando se cancela una tarea publicada.
 |---|---|---|---|
 | 2026-09-26 | Versión inicial | — | PM |
 | 2026-09-28 | Jerarquía de fuentes; prefijo `/api/v1`; **nuevo** `POST /assignments/{id}/close` (la acción `close` no tenía endpoint); columna "Endpoint dueño" y reparto G3 servicio / G4 endpoints; nota tarea vs. asignación; eventos emitidos; reglas del .docx que faltaban (409, 422, independencia, idempotente o 409); checklist con pruebas y OpenAPI | PM | PM |
+| 2026-11-14 | §4: `submit`/`resubmit` responden 422 si el tipo exige archivo y el intento actual no tiene ninguno; regla del intento actual de `entrega` compartida con G4 | PM (decisión del 13-nov) y hallazgo de QA | Pendiente |
