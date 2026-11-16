@@ -17,6 +17,10 @@ Prioridad: **Alta** → **Media** → **Baja**. El Planner de Allison tiene tres
 | G2-33, H-04: el ejemplo 200 de `GET /me` traía `creado_en` y `actualizado_en` y la API real no los devuelve | Robert | 🔵 Corregido el 15-nov en `openapi_docs.py` (ejemplo sin fechas); `tests/test_openapi.py` lo compara con la respuesta real. Falta el PR (Daniel) y que Allison repita G2-33 |
 | Descarga de archivos: la descripción de Swagger solo mencionaba al dueño y al admin | Robert | 🔵 Alineada con la regla nueva del PM (dueño, admin o rol no docente con `files.download`); README al día. QA confirmó la regla en Railway: revisor 200, docente ajeno 403 |
 | Retest complementario (14-nov): 7 hallazgos de integración del PM | Todos | ✅ PASS en descarga por revisor, 422 en usuarios y roles, correo inválido, Coordinación en `GET /users` y mensaje al rechazar un formato; archivo eliminado PASS en prueba aislada (1/1). `UPLOAD_DIR`: PASS en código, sin verificar el volumen de Railway. H-02 (201): PASS documental, no se creó un usuario nuevo para no modificar la base compartida |
+| G4 (15-nov): corrigió el enlace «Inicio» de su menú | G4 | 🔵 Corregido por el G4; falta que QA lo repita cuando ellos avisen |
+| G4 (15-nov): la descarga de `GET /files/{id}` es muy amplia (un rol no docente con `files.download` baja cualquier archivo por su id) | PM decide; Robert y el dueño de `files.py` | ⏳ Esa regla la pidió el PM el 14-nov; no se cambia hasta su decisión. Si cambia, se ajusta `files.py`, y Robert actualiza Swagger y pruebas. QA repetirá la descarga |
+| Revisión de seguridad de la configuración (15-nov) | Robert | 🔵 `config.py` rechaza la clave de ejemplo y avisa si `SECRET_KEY` es corta o falta `DATABASE_URL`; `.env.example` y `README.md` al día (ruta absoluta para `UPLOAD_DIR`). `pytest`: 130 pasan |
+| `cryptography==44.0.2` tiene vulnerabilidades conocidas y está fijada igual en la raíz y en los grupos 1, 2, 4 y 5 | PM y todos | ⏳ Debe cambiarse en todos a la vez; si se cambia solo en uno, la instalación de la raíz da conflicto |
 
 `pytest` completo en `grupo-2` (15-nov): **130 pasan**.
 
