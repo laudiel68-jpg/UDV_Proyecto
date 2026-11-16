@@ -12,7 +12,7 @@ cero sigue [`docs/instalacion.md`](docs/instalacion.md).
 | Facultades (para elegir al crear una unidad académica) | `GET /api/v1/faculties` | G6-21 |
 | Pantallas con inicio de sesión del G2: catálogos, panel y auditoría | `g6_admin/pantallas/` (`catalogos.html`, `panel.html`, `auditoria.html`) | G6-01, G6-02, G6-26 a G6-33 |
 | Notificaciones: las propias, paginadas, y marcar como leída | `GET /api/v1/notifications` (`?unread=true`) y `PATCH /api/v1/notifications/{id}/read` | G6-04 a G6-13 |
-| Eventos de G3, G4 y G5 → notificaciones | Automático al listar; `POST /api/v1/notifications/process` (administración) | G6-17 |
+| Eventos de G3, G4 y G5 → notificaciones | Se procesan al llamar `POST /api/v1/notifications/process` (administración) y al listar; no hay proceso en segundo plano | G6-17 |
 | Panel de indicadores: por estado, vencidas, próximas a vencer y cumplimiento ([`docs/panel.md`](docs/panel.md)) | `GET /api/v1/dashboard` | G6-26 a G6-29 |
 | Auditoría: consulta filtrada (administración y auditoría) | `GET /api/v1/audit` con `user_id`, `from`, `to`, `entity` y `action`; `GET /api/v1/audit/filters` da los valores para elegir | G6-14, G6-15, G6-30 a G6-33 |
 | Nada queda a medias si algo falla | Transacción por operación y por evento | G6-18 |
@@ -90,9 +90,28 @@ del G2 guarda el token con esa misma clave, la sesión también se comparte.
 
 Los grupos 3, 4 y 5 **no tienen que llamar al G6**. Cuando cambian una tarea,
 una entrega o un programa, los triggers del G1 escriben una fila en `evento`.
-El G6 procesa los eventos pendientes cada vez que alguien lista sus
-notificaciones (o con `POST /api/v1/notifications/process`), guarda un aviso
-por destinatario y marca el evento como procesado.
+El G6 convierte esos eventos en avisos, uno por destinatario, y marca cada
+evento como procesado.
+
+### Cuándo se procesan
+
+**No hay un proceso en segundo plano.** Los eventos se convierten en avisos
+cuando se llama a:
+
+- `POST /api/v1/notifications/process` (solo administración). Procesa todos
+  los pendientes en ese momento y responde, por ejemplo,
+  `{"processed": 3, "notifications": 4, "failed": 0}`.
+- `GET /api/v1/notifications`. Cada vez que alguien lista sus avisos, primero
+  se procesan los pendientes, así que normalmente no hace falta nada más.
+
+En los dos casos también se generan los avisos de `assignment.due_soon`, con
+el procedimiento del G1, que usa la hora de la base. Llamar varias veces no
+duplica nada.
+
+**Para probarlo (QA):** hacer la acción en el G3, G4 o G5 (publicar, entregar,
+devolver, aprobar, autorizar un programa…), llamar a
+`POST /api/v1/notifications/process` con un usuario de administración y
+después `GET /api/v1/notifications` con el usuario que debe recibir el aviso.
 
 | Evento (lo crea el G1 cuando…) | A quién avisa el G6 |
 |---|---|
@@ -174,7 +193,7 @@ triggers reales del G1.
 | `test_persistencia.py` | G6-37 |
 | `test_regresion.py` | G6-40 |
 | `integracion/test_mysql_g1.py` | Catálogos, panel, auditoría y permisos contra MySQL con el login real |
-| `integracion/test_flujo_e2e.py` | G6-04 a G6-16 y G6-18 de punta a punta: la app completa (`main.py`, con el G3) recorre una tarea y revisa avisos y auditoría en cada paso |
+| `integracion/test_flujo_e2e.py` | G6-04 a G6-16 y G6-18 de punta a punta: la app completa (`main.py`, con G2, G3, G4 y G5) recorre una tarea con su evidencia, autoriza un programa, baja el PDF y revisa avisos y auditoría en cada paso |
 | `integracion/test_mysql_g1.py` | Todo lo anterior contra MySQL y el login del G2; el panel contra la vista `v_panel_tarea` |
 
 ## Cómo se integra a la aplicación

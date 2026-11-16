@@ -150,6 +150,28 @@ def test_la_fecha_propia_de_la_asignacion_gana_a_la_de_la_tarea(datos):
     assert (proxima["task_id"], proxima["due_date"]) == (1, "2026-11-04T12:00:00Z")
 
 
+def test_sin_ahora_usa_la_hora_de_la_base(datos):
+    # La base dice qué hora es (NOW(3), igual que la vista del G1 y sus avisos
+    # de vencimiento), no el reloj del servidor de la app. Esta base está en
+    # Guatemala (UTC-6) y su reloj marca AHORA, aunque hoy sea otro día.
+    class BaseEnGuatemala(RepositorioPanel):
+        def reloj(self):
+            return AHORA, -360
+
+    with datos() as s:
+        resultado = ServicioPanel(BaseEnGuatemala(s)).indicadores()
+    assert resultado["generated_at"] == "2026-11-02T12:00:00-06:00"
+    assert [a["assignment_id"] for a in resultado["due_soon"]["items"]] == [3]
+    assert resultado["due_soon"]["items"][0]["due_date"] == "2026-11-04T12:00:00-06:00"
+    assert resultado["overdue"]["total"] == 1
+
+
+def test_el_reloj_de_la_base_de_pruebas_esta_en_utc(fabrica):
+    with fabrica() as s:
+        hora, desfase = RepositorioPanel(s).reloj()
+    assert isinstance(hora, datetime) and desfase == 0
+
+
 def test_mas_dias_de_aviso_amplian_la_lista(datos):
     with datos() as s:
         s.execute(tablas.parametro.update().values(valor="20"))

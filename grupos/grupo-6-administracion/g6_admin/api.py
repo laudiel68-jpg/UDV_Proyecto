@@ -328,6 +328,8 @@ def listar_facultades(db: Sesion, _usuario: UsuarioConSesion) -> list[dict[str, 
 @router.get("/notifications", tags=["Notificaciones"],
             response_model=PaginaNotificaciones,
             summary="Listar mis notificaciones (las más recientes primero)",
+            description="Antes de listar, procesa los eventos pendientes, igual que "
+                        "`POST /notifications/process`.",
             responses=_errores(401, 422))
 def listar_notificaciones(
     servicio: Notificaciones,
@@ -348,6 +350,12 @@ def listar_notificaciones(
 @router.post("/notifications/process", tags=["Notificaciones"],
              response_model=ResumenEventos,
              summary="Procesar ya los eventos pendientes (solo administración)",
+             description="Las notificaciones no se crean solas en segundo plano: se crean "
+                         "cuando se llama a esta ruta (o cuando alguien lista las suyas). "
+                         "Convierte en avisos los eventos que dejaron G3, G4 y G5 en la tabla "
+                         "`evento`, y genera los de `assignment.due_soon` con la hora de la "
+                         "base. Llamarla varias veces no duplica nada. Responde cuántos "
+                         "eventos procesó, cuántos avisos creó y cuántos fallaron.",
              responses=_errores(401, 403))
 def procesar_eventos(servicio: Notificaciones, _usuario: Administracion) -> dict[str, int]:
     return servicio.procesar_pendientes()

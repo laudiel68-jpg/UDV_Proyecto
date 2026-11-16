@@ -1,10 +1,12 @@
 """Flujo de punta a punta con la app completa (G6-04 a G6-16 y G6-18).
 
-Usa el main.py de la raíz, con el login del G2, el workflow del G3 y las rutas
-del G6, contra un MySQL con db_udv recién creada por el G1. Recorre una tarea
-como lo haría el equipo (crear, publicar, empezar, entregar, revisar,
-devolver, reenviar y aprobar) y revisa en cada paso que la notificación le
-llegue a quien corresponde y que la auditoría muestre la transición.
+Usa el main.py de la raíz, con el login y los archivos del G2, el workflow del
+G3, las entregas del G4, los programas del G5 y las rutas del G6, contra un
+MySQL con db_udv recién creada por el G1. Recorre una tarea como lo haría el
+equipo (crear, publicar, empezar, adjuntar la evidencia, entregar, revisar,
+devolver, reenviar y aprobar), autoriza una versión de programa y descarga su
+PDF. En cada paso revisa que la notificación le llegue a quien corresponde y
+que la auditoría muestre la transición.
 
     set G6_MYSQL_URL=mysql+pymysql://root:<clave>@127.0.0.1:3306/db_udv
     python -m pytest tests/integracion
@@ -17,6 +19,7 @@ nunca la compartida.
 import importlib
 import os
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +37,8 @@ pytestmark = [
 
 CONTRASENA_DEMO = "Demo2026!"  # Pública en el README del G1; solo datos de prueba.
 COORDINACION, DOCENTE, REVISION, DIRECCION, ADMIN = 2, 3, 5, 6, 1
+PROGRAMA_SEMILLA, PERIODO_SEMILLA = 1, 1  # El programa autorizado de la semilla del G1.
+PDF_DE_PRUEBA = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 
 
 @pytest.fixture(scope="module")
@@ -50,6 +55,9 @@ def cliente():
     if str(RAIZ) not in sys.path:
         sys.path.insert(0, str(RAIZ))
     app = importlib.import_module("main").app
+    # Los archivos que sube la prueba van a una carpeta temporal, no al repositorio.
+    from g2_api import config
+    carpeta_anterior, config.UPLOAD_DIR = config.UPLOAD_DIR, tempfile.mkdtemp()
     motor = create_engine(URL, pool_pre_ping=True)
     fabrica = sessionmaker(bind=motor)
 
@@ -63,6 +71,7 @@ def cliente():
         pytest.skip("main.py no monta todavía el G3 y el G6")
     yield TestClient(app)
     app.dependency_overrides.clear()
+    config.UPLOAD_DIR = carpeta_anterior
     motor.dispose()
     if anterior is None:
         os.environ.pop("DATABASE_URL", None)
@@ -80,7 +89,8 @@ def entrar(cliente, correo):
 @pytest.fixture(scope="module")
 def sesiones(cliente):
     return {quien: entrar(cliente, f"{quien}@demo.udv.edu.gt")
-            for quien in ("coordinacion", "docente1", "revisor", "admin", "auditoria", "docente2")}
+            for quien in ("coordinacion", "docente1", "revisor", "admin", "auditoria", "docente2",
+                          "direccion")}
 
 
 def avisos(cliente, encabezados, titulo):
@@ -125,10 +135,24 @@ def test_flujo_completo_notifica_y_audita_cada_paso(cliente, sesiones):
     assert len(del_docente["task.published"]) == 1
     assert len(del_docente["assignment.due_soon"]) == 1
 
-    # G6-06: al entregar, le llega al revisor.
+    # G6-16: el docente sube su evidencia (G2), la adjunta a la entrega (G4) y
+    # el revisor la ve en el detalle y la descarga.
     assert accion(cliente, s["docente1"], asignacion, "start").status_code == 200
+    subida = cliente.post("/api/v1/files", headers=s["docente1"],
+                          files={"file": ("evidencia.pdf", PDF_DE_PRUEBA, "application/pdf")})
+    assert subida.status_code == 200, subida.text
+    archivo = str(subida.json()["file_id"])
+    adjunto = cliente.post(f"/api/v1/assignments/{asignacion}/files", headers=s["docente1"],
+                           json={"file_id": archivo, "name": "evidencia.pdf"})
+    assert adjunto.status_code == 200, adjunto.text
+
+    # G6-06: al entregar, le llega al revisor.
     assert accion(cliente, s["docente1"], asignacion, "submit").status_code == 200
     assert len(avisos(cliente, s["revisor"], titulo)["assignment.submitted"]) == 1
+    detalle = cliente.get(f"/api/v1/assignments/{asignacion}", headers=s["revisor"])
+    assert archivo in {f["file_id"] for f in detalle.json()["files"]}
+    descarga = cliente.get(f"/api/v1/files/{archivo}", headers=s["revisor"])
+    assert descarga.status_code == 200 and descarga.content == PDF_DE_PRUEBA
 
     # G6-07: al devolver, le llega al docente con la observación.
     assert accion(cliente, s["revisor"], asignacion, "review").status_code == 200
@@ -195,14 +219,38 @@ def test_cancelar_avisa_a_los_destinatarios(cliente, sesiones):
     assert len(avisos(cliente, s["docente1"], titulo)["task.cancelled"]) == 1
 
 
-def test_programa_autorizado_avisa_al_docente_y_a_coordinacion(cliente, sesiones):
-    # G6-09: la semilla del G1 autoriza el programa 1, y su trigger deja el evento.
-    # Las rutas de programas son del G5; aquí se revisa lo que le toca al G6.
-    nombre = "Programación Web - 2026-1"
-    for quien in ("docente1", "coordinacion"):
-        respuesta = cliente.get("/api/v1/notifications?per_page=100", headers=sesiones[quien])
-        eventos = [n["event"] for n in respuesta.json()["data"] if nombre in n["message"]]
-        assert eventos.count("program.authorized") == 1, quien
+def avisos_de_programa(cliente, encabezados):
+    respuesta = cliente.get("/api/v1/notifications?per_page=100", headers=encabezados)
+    assert respuesta.status_code == 200, respuesta.text
+    return [n for n in respuesta.json()["data"] if n["event"] == "program.authorized"]
+
+
+def test_autorizar_un_programa_avisa_y_deja_bajar_el_pdf(cliente, sesiones):
+    # G6-09 y el final de G6-16, con las rutas del G5. Se abre una versión
+    # nueva del programa de la semilla, así la prueba se puede repetir.
+    s = sesiones
+    antes = {q: len(avisos_de_programa(cliente, s[q]))
+             for q in ("docente1", "coordinacion", "docente2")}
+    nueva = cliente.post(f"/api/v1/course-programs/{PROGRAMA_SEMILLA}/versions",
+                         headers=s["coordinacion"], json={"periodo_id": PERIODO_SEMILLA})
+    assert nueva.status_code == 201, nueva.text
+    version = nueva.json()["id"]
+    for paso, quien in (("submit", "docente1"), ("review", "revisor"),
+                        ("approve", "revisor"), ("authorize", "direccion")):
+        respuesta = cliente.post(f"/api/v1/program-versions/{version}/{paso}",
+                                 headers=s[quien], json={"comentario": "Prueba del G6"})
+        assert respuesta.status_code == 200, (paso, respuesta.text)
+
+    # Le llega al docente responsable y a coordinación, una sola vez; a nadie más.
+    despues = {q: len(avisos_de_programa(cliente, s[q])) for q in antes}
+    assert despues == {"docente1": antes["docente1"] + 1,
+                       "coordinacion": antes["coordinacion"] + 1,
+                       "docente2": antes["docente2"]}
+
+    pdf = cliente.get(f"/api/v1/program-versions/{version}/pdf", headers=s["docente1"])
+    assert pdf.status_code == 200, pdf.text
+    assert pdf.headers["content-type"] == "application/pdf"
+    assert pdf.content.startswith(b"%PDF")
 
 
 def test_una_accion_rechazada_no_deja_nada_a_medias(cliente, sesiones):

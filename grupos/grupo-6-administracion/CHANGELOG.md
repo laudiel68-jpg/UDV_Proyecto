@@ -3,6 +3,19 @@
 La versión es la de `g6_admin/__init__.py` y la que muestra
 `GET /api/v1/health` si no se define `APP_VERSION`.
 
+## 0.4.2 (16-nov-2026), Planner No.5
+
+- **Panel:** "por vencer" y "vencidas" se calculan con la hora de la base
+  (`NOW(3)`), la misma de la vista `v_panel_tarea` y de los avisos de
+  vencimiento del G1, y no con la del servidor de la app. Las fechas de la
+  respuesta llevan la zona de la base (`Z` o `-06:00`).
+- **Notificaciones:** el README y Swagger explican que se procesan al llamar
+  `POST /api/v1/notifications/process` (y al listar); no hay proceso en
+  segundo plano.
+- **Prueba de punta a punta (G6-09 y G6-16):** ahora también adjunta la
+  evidencia (G2 y G4), autoriza una versión de programa (G5), revisa los avisos
+  y descarga el PDF. Evidencia en `docs/evidencia_planner5.md`.
+
 ## 0.4.1 (04-nov-2026), retest de QA
 
 - **G6-15:** `GET /api/v1/audit` también muestra el historial de asignaciones

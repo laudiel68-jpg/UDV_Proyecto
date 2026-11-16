@@ -20,7 +20,12 @@ cada número con las consultas de abajo.
 
 - La **fecha límite** de una asignación es la suya; si no tiene, se usa la de
   su tarea.
-- **Ahora** se toma en UTC, igual que las fechas de la base.
+- **Ahora** es la hora de la base (`NOW(3)` en MySQL), no la del servidor de
+  la app. Es la misma que usan la vista `v_panel_tarea` y el procedimiento de
+  avisos de vencimiento del G1, y la misma zona en que el G1 guarda sus fechas.
+- Las fechas de la respuesta (`generated_at` y `due_date`) llevan la
+  diferencia de la base con UTC: terminan en `Z` si la base está en UTC, o en
+  `-06:00` si está en hora de Guatemala.
 - Las listas de vencidas y próximas muestran hasta `limit` asignaciones (20
   por defecto, máximo 100), ordenadas por fecha. Los totales cuentan todas.
 
@@ -55,11 +60,10 @@ SELECT SUM(entregadas + en_revision + aprobadas) AS completed,
 FROM v_panel_tarea;
 ```
 
-La vista calcula "ahora" con `NOW(3)`, que usa la zona horaria del servidor
-MySQL. En Railway y en el MySQL de Docker sin `TZ` es UTC, y coincide con el
-panel. Si el servidor tuviera otra zona (el `docker-compose.yml` de la raíz
-pone `TZ: America/Guatemala`), la vista se correría 6 horas; en ese caso se
-comprueba con `UTC_TIMESTAMP(3)` en lugar de `NOW(3)`.
+La vista y el panel calculan "ahora" con el mismo `NOW(3)` de la base, así
+que coinciden aunque el servidor MySQL no esté en UTC (el `docker-compose.yml`
+de la raíz pone `TZ: America/Guatemala`). `tests/integracion/test_mysql_g1.py`
+lo comprueba con una sesión en `-06:00`.
 
 ## Ejemplo de respuesta
 

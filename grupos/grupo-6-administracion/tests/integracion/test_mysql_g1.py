@@ -193,19 +193,22 @@ def test_marcar_leida_en_mysql(cliente, docente):
 
 # ── Panel (G6-26 a G6-29): coincide con la vista v_panel_tarea del G1 ──────
 
+VISTA_PANEL = (
+    "SELECT COALESCE(SUM(total_asignaciones), 0) AS total,"
+    " COALESCE(SUM(canceladas), 0) AS canceladas,"
+    " COALESCE(SUM(entregadas + en_revision + aprobadas), 0) AS cumplidas,"
+    " COALESCE(SUM(CASE WHEN estado_tarea NOT IN ('cancelled', 'closed')"
+    "   THEN vencidas END), 0) AS vencidas,"
+    " COALESCE(SUM(CASE WHEN estado_tarea NOT IN ('cancelled', 'closed')"
+    "   THEN proximas_a_vencer END), 0) AS proximas FROM v_panel_tarea")
+
+
 def test_el_panel_coincide_con_la_vista_del_g1(cliente, admin, fabrica):
     panel = cliente.get("/api/v1/dashboard?limit=100", headers=admin)
     assert panel.status_code == 200, panel.text
     datos = panel.json()
     with fabrica() as s:
-        vista = s.execute(text(
-            "SELECT COALESCE(SUM(total_asignaciones), 0) AS total,"
-            " COALESCE(SUM(canceladas), 0) AS canceladas,"
-            " COALESCE(SUM(entregadas + en_revision + aprobadas), 0) AS cumplidas,"
-            " COALESCE(SUM(CASE WHEN estado_tarea NOT IN ('cancelled', 'closed')"
-            "   THEN vencidas END), 0) AS vencidas,"
-            " COALESCE(SUM(CASE WHEN estado_tarea NOT IN ('cancelled', 'closed')"
-            "   THEN proximas_a_vencer END), 0) AS proximas FROM v_panel_tarea")).one()
+        vista = s.execute(text(VISTA_PANEL)).one()
         tareas = dict(s.execute(text(
             "SELECT estado_codigo, COUNT(*) FROM tarea WHERE eliminado_en IS NULL"
             " GROUP BY estado_codigo")).all())
@@ -216,6 +219,26 @@ def test_el_panel_coincide_con_la_vista_del_g1(cliente, admin, fabrica):
     assert datos["compliance"]["completed"] == vista.cumplidas
     assert datos["compliance"]["expected"] == vista.total - vista.canceladas
     assert {e: n for e, n in datos["tasks"]["by_state"].items() if n} == tareas
+
+
+def test_el_panel_usa_la_hora_de_la_base_aunque_no_este_en_utc():
+    # Una base en hora de Guatemala, como la del docker-compose de la raíz. El
+    # panel toma "ahora" de la base, igual que la vista del G1, así que siguen
+    # coincidiendo, y las fechas dicen -06:00 en lugar de Z.
+    from g6_admin.panel import RepositorioPanel, ServicioPanel
+
+    motor = create_engine(URL, connect_args={"init_command": "SET time_zone = '-06:00'"})
+    try:
+        with sessionmaker(bind=motor)() as s:
+            datos = ServicioPanel(RepositorioPanel(s)).indicadores(limite=100)
+            vista = s.execute(text(VISTA_PANEL)).one()
+    finally:
+        motor.dispose()
+    assert datos["generated_at"].endswith("-06:00")
+    assert datos["overdue"]["total"] == vista.vencidas
+    assert datos["due_soon"]["total"] == vista.proximas
+    assert all(a["due_date"].endswith("-06:00")
+               for a in datos["overdue"]["items"] + datos["due_soon"]["items"])
 
 
 def test_permisos_del_panel_y_la_auditoria_con_roles_reales(cliente, docente):

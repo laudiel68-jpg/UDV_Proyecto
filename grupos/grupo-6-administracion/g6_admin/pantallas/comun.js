@@ -63,7 +63,7 @@ const UDV = (() => {
     contenedor.append(alerta);
   }
 
-  // Fecha ISO en UTC ("2026-11-02T18:00:00Z") → texto en la hora del navegador.
+  // Fecha ISO con su zona ("2026-11-02T18:00:00Z" o "...-06:00") → texto en la hora del navegador.
   const formatoFecha = new Intl.DateTimeFormat("es-GT", { dateStyle: "medium", timeStyle: "short" });
   function fecha(iso) {
     return iso ? formatoFecha.format(new Date(iso)) : "—";

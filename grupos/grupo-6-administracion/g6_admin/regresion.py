@@ -87,10 +87,12 @@ def ejecutar(llamar: Llamada, *, admin: tuple[str, str],
         caso("G6-26", "Las asignaciones por estado suman el total",
              _cuadra(panel["assignments"]), str(panel["assignments"]))
         caso("G6-27", "Cada vencida ya pasó su fecha límite",
-             all(a["due_date"] <= panel["generated_at"] for a in panel["overdue"]["items"]),
+             all(_fecha(a["due_date"]) <= _fecha(panel["generated_at"])
+                 for a in panel["overdue"]["items"]),
              str(panel["overdue"]["items"][:3]))
         caso("G6-28", "Cada próxima a vencer está dentro del plazo de aviso",
-             all(panel["generated_at"] <= a["due_date"] for a in panel["due_soon"]["items"]),
+             all(_fecha(panel["generated_at"]) <= _fecha(a["due_date"])
+                 for a in panel["due_soon"]["items"]),
              str(panel["due_soon"]["items"][:3]))
         cumplimiento = panel["compliance"]
         esperado = (round(100 * cumplimiento["completed"] / cumplimiento["expected"], 1)
@@ -128,6 +130,11 @@ def _entrar(llamar: Llamada, caso: _Registro, quien: str, correo: str, clave: st
     token = (datos or {}).get("access_token") if codigo == 200 else None
     caso("G2", f"Inicia sesión {quien} ({correo})", bool(token), f"HTTP {codigo}")
     return token
+
+
+def _fecha(texto: str) -> datetime:
+    # El panel manda la hora de la base con su zona ("Z" o "-06:00").
+    return datetime.fromisoformat(texto.replace("Z", "+00:00"))
 
 
 def _cuadra(conteo: dict[str, Any]) -> bool:
