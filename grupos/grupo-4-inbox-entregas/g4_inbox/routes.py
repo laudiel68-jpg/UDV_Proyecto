@@ -26,7 +26,7 @@ from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from g2_api.routers.auth import obtener_usuario_actual
 from g2_api.models import Usuario
@@ -45,9 +45,11 @@ router = APIRouter(prefix="/api/v1", tags=["G4 - Inbox y entregas"])
 
 # Códigos de la tabla rol de G1. Quién puede hacer qué con una asignación ajena:
 #   - el docente dueño: todo (ver, comentar, modificar borrador y archivos)
-#   - reviewer, coordinator, admin: ver y comentar, pero NO tocar la entrega
+#   - coordinator, admin: ver y comentar, pero NO tocar la entrega
+#   - reviewer: lo mismo, pero solo si es el revisor designado de la tarea
+#     (tarea.revisor_id). Un revisor cualquiera no ve entregas ajenas.
 #   - auditor: solo ver (ni comentar ni modificar)
-ROLES_CON_ACCESO_GLOBAL = {"reviewer", "coordinator", "admin"}
+ROLES_CON_ACCESO_GLOBAL = {"coordinator", "admin"}
 ROLES_SOLO_LECTURA = {"auditor"}
 
 
@@ -60,9 +62,12 @@ def _exigir_acceso(asignacion: dict, usuario: Usuario, permiso: str) -> None:
     if asignacion["assignee_id"] == usuario.id:
         return
     roles = {r.codigo for r in (usuario.roles or [])}
-    if permiso == "ver" and roles & (ROLES_CON_ACCESO_GLOBAL | ROLES_SOLO_LECTURA):
+    if "reviewer" in roles and asignacion.get("reviewer_id") == usuario.id:
+        roles.add("revisor_designado")
+    puede_ver_y_comentar = roles & (ROLES_CON_ACCESO_GLOBAL | {"revisor_designado"})
+    if permiso == "ver" and (puede_ver_y_comentar or roles & ROLES_SOLO_LECTURA):
         return
-    if permiso == "comentar" and roles & ROLES_CON_ACCESO_GLOBAL:
+    if permiso == "comentar" and puede_ver_y_comentar:
         return
     raise HTTPException(status_code=403, detail="No tienes acceso a esta asignación")
 
@@ -114,7 +119,12 @@ def _construir_db() -> List[dict]:
     for item in base:
         item.update(DETALLE_EXTRA.get(item["id"], {}))
         item["requiere_archivo"] = REQUIERE_ARCHIVO_POR_TIPO.get(item["task_type"], True)
+        item["reviewer_id"] = 5  # en los datos de ejemplo el revisor designado es el usuario 5
         item["history"] = [{"action": "publish", "new_status": "assigned", "actor": "coordinacion"}]
+        item["last_return"] = None
+        item["last_approval"] = None
+        if item["status"] == "returned" and item["comments"]:
+            item["last_return"] = {"comment": item["comments"][-1]["text"], "at": None, "actor": "revisor1"}
     return base
 
 
@@ -151,7 +161,7 @@ class BorradorIn(BaseModel):
 
 
 class ComentarioIn(BaseModel):
-    text: str
+    text: str = Field(min_length=1, max_length=5000)
 
 
 class ArchivoIn(BaseModel):
@@ -189,7 +199,23 @@ def detalle_asignacion(assignment_id: int, usuario: Usuario = Depends(obtener_us
     if not a:
         raise HTTPException(status_code=404, detail="Asignación no encontrada")
     _exigir_acceso(a, usuario, "ver")
-    return {**a, "allowed_actions": acciones_permitidas(a)}
+    return {**a, "allowed_actions": acciones_permitidas(a), "viewer": _papel_del_usuario(a, usuario)}
+
+
+def _papel_del_usuario(asignacion: dict, usuario: Usuario) -> dict:
+    """Le dice a la pantalla qué botones mostrar a quien está viendo.
+
+    Solo es para la pantalla: quien decide de verdad es G3 al ejecutar la
+    acción. Misma regla que G3: si la tarea tiene revisor, solo él revisa;
+    si no tiene, coordinación o admin.
+    """
+    roles = {r.codigo for r in (usuario.roles or [])}
+    revisor = asignacion.get("reviewer_id")
+    if revisor is not None:
+        es_revisor = revisor == usuario.id
+    else:
+        es_revisor = bool(roles & {"coordinator", "admin"})
+    return {"is_assignee": asignacion["assignee_id"] == usuario.id, "is_reviewer": es_revisor}
 
 
 # ============================================================================
@@ -202,8 +228,14 @@ def guardar_borrador(assignment_id: int, borrador: BorradorIn,
     if not a:
         raise HTTPException(status_code=404, detail="Asignación no encontrada")
     _exigir_acceso(a, usuario, "modificar")
-    a["draft_comment"] = borrador.comment
-    return {"status": "borrador guardado", "draft_comment": a["draft_comment"]}
+    if USAR_MYSQL:
+        try:
+            database.guardar_borrador(assignment_id, borrador.comment, usuario.id)
+        except database.ErrorConflicto as e:
+            raise HTTPException(status_code=409, detail=str(e))
+    else:
+        a["draft_comment"] = borrador.comment
+    return {"status": "borrador guardado", "draft_comment": borrador.comment}
 
 
 # ============================================================================
@@ -225,6 +257,8 @@ def crear_comentario(assignment_id: int, comentario: ComentarioIn,
     if not a:
         raise HTTPException(status_code=404, detail="Asignación no encontrada")
     _exigir_acceso(a, usuario, "comentar")
+    if USAR_MYSQL:
+        return database.crear_comentario(assignment_id, usuario.id, comentario.text)
     nuevo = {"author": str(usuario.id), "text": comentario.text}
     a["comments"].append(nuevo)
     return nuevo
@@ -240,5 +274,14 @@ def vincular_archivo(assignment_id: int, archivo: ArchivoIn,
     if not a:
         raise HTTPException(status_code=404, detail="Asignación no encontrada")
     _exigir_acceso(a, usuario, "modificar")
-    a["files"].append({"file_id": archivo.file_id, "name": archivo.name})
-    return {"status": "archivo vinculado", "files": a["files"]}
+    if not USAR_MYSQL:
+        a["files"].append({"file_id": archivo.file_id, "name": archivo.name})
+        return {"status": "archivo vinculado", "files": a["files"]}
+    try:
+        intento = database.vincular_archivo(assignment_id, archivo.file_id, usuario.id)
+    except database.ArchivoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except database.ErrorConflicto as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    a = buscar_asignacion(assignment_id)  # releer: los archivos salen de la base
+    return {"status": "archivo vinculado", "files": a["files"], **intento}

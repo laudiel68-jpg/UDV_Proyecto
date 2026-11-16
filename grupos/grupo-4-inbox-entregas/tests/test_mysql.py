@@ -96,7 +96,16 @@ def test_otro_docente_recibe_403_con_datos_reales(cliente, dueno_y_asignacion):
     assert cliente.get(f"/api/v1/assignments/{aid}").status_code == 403
 
 
-def test_un_revisor_si_puede_ver_el_detalle_con_datos_reales(cliente, dueno_y_asignacion):
-    _, aid, _ = dueno_y_asignacion
-    entrar_como(999999, roles=("teacher", "reviewer"))
+def test_solo_el_revisor_designado_ve_el_detalle_con_datos_reales(cliente):
+    with database.SessionLocal() as s:
+        fila = s.execute(text("""
+            SELECT td.id, t.revisor_id FROM tarea_destinatario td
+            JOIN tarea t ON t.id = td.tarea_id
+            WHERE t.revisor_id IS NOT NULL LIMIT 1""")).first()
+    if fila is None:
+        pytest.skip("La base no tiene tareas con revisor designado")
+    aid, revisor = fila
+    entrar_como(revisor, roles=("teacher", "reviewer"))
     assert cliente.get(f"/api/v1/assignments/{aid}").status_code == 200
+    entrar_como(999999, roles=("teacher", "reviewer"))   # revisor, pero no de esta tarea
+    assert cliente.get(f"/api/v1/assignments/{aid}").status_code == 403

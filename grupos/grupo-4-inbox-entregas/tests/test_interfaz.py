@@ -125,3 +125,65 @@ def test_las_variables_udv_usadas_existen_en_udv_css():
     propias = (STATIC / "css" / "inbox.css").read_text(encoding="utf-8")
     for variable in set(re.findall(r"var\((--udv-[\w-]+)\)", propias)):
         assert f"{variable}:" in css, variable
+
+
+# ---------- menú y entrega (pedidos del PM del 13-nov) ----------
+
+MENU_ESPERADO = {"Inicio": "/app/", "Tareas": "/app/g3/", "Programas": "/app/g5/Programa.html"}
+
+
+@pytest.mark.parametrize("pantalla", ["inbox.html", "detalle.html"])
+def test_el_menu_lleva_a_las_pantallas_de_los_otros_grupos(pantalla):
+    html = (STATIC / pantalla).read_text(encoding="utf-8")
+    enlaces = dict((texto, href) for href, texto in re.findall(r'<li><a href="([^"]*)"[^>]*>([^<]+)</a></li>', html))
+    for texto, destino in MENU_ESPERADO.items():
+        assert enlaces.get(texto) == destino, f"{pantalla}: {texto} -> {enlaces.get(texto)}"
+
+
+def test_al_entregar_el_archivo_se_sube_a_g2_y_no_se_inventa_el_id():
+    js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
+    assert "demo-" not in js                       # antes: file_id: `demo-${id}-${Date.now()}`
+    assert "new FormData()" in js and "/files`" in js
+    assert "datos.file_id" in js                   # G2 responde {"file_id": ..., "nombre_interno": ...}
+    # la subida va antes de vincular, y vincular antes del submit
+    assert js.index("subirArchivo(archivoNuevo)") < js.index("/files`, {\n        method: \"POST\"") < js.index("const accion = tarea.estado")
+
+
+def test_no_hay_botones_blancos_sobre_la_tarjeta_blanca():
+    """btn-udv-outline de udv.css es texto y borde blancos: sobre fondo claro no se ve."""
+    for archivo in [STATIC / "detalle.html", STATIC / "inbox.html", STATIC / "js" / "detalle.js", STATIC / "js" / "inbox.js"]:
+        assert "btn-udv-outline" not in archivo.read_text(encoding="utf-8"), archivo.name
+
+
+def test_los_botones_dependen_de_quien_mira():
+    js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
+    assert 'revisor && tareaActual.estado === "submitted"' in js
+    assert 'docente && tareaActual.estado === "assigned"' in js
+
+
+def test_la_observacion_sale_de_la_devolucion_y_no_de_los_comentarios():
+    """Antes se mostraba el último comentario como 'Observación del revisor': la
+    observación de G3 no llegaba y un comentario del docente salía como si fuera del revisor."""
+    js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
+    assert "api.last_return" in js
+    assert "api.comments[api.comments.length - 1].text" not in js
+
+
+def test_el_detalle_muestra_los_archivos_y_permite_descargarlos():
+    """El revisor tiene que ver la evidencia que entregó el docente."""
+    html = (STATIC / "detalle.html").read_text(encoding="utf-8")
+    js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
+    assert 'id="listaArchivos"' in html
+    assert "mostrarArchivos(tareaActual.archivos)" in js
+    # la descarga de G2 pide el token: tiene que ir con fetch y Sesion.encabezados()
+    assert "${API_BASE}/files/${encodeURIComponent(archivo.file_id)}" in js
+    assert "URL.createObjectURL" in js
+
+
+def test_aprobar_envia_la_observacion_si_se_escribio():
+    """Antes Aprobar no mandaba el texto del cuadro de observación y se perdía sin avisar."""
+    js = (STATIC / "js" / "detalle.js").read_text(encoding="utf-8")
+    assert '"Aprobar", "btn-udv-primary", () => aprobar(tareaActual)' in js
+    inicio = js.index("async function aprobar(")
+    assert 'getElementById("obs")' in js[inicio:inicio + 400]
+    assert "api.last_approval" in js

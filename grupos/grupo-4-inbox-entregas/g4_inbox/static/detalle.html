@@ -19,17 +19,17 @@
     </a>
     <nav aria-label="Principal">
       <ul class="udv-header__nav">
-        <li><a href="#">Inicio</a></li>
+        <li><a href="/app/">Inicio</a></li>
         <li><a href="inbox.html" aria-current="page">Inbox</a></li>
-        <li><a href="#">Tareas</a></li>
-        <li><a href="#">Programas</a></li>
+        <li><a href="/app/g3/">Tareas</a></li>
+        <li><a href="/app/g5/Programa.html">Programas</a></li>
       </ul>
     </nav>
   </header>
 
   <main class="udv-section">
     <div class="udv-container">
-      <a href="inbox.html" class="btn-udv btn-udv-outline btn-udv-sm" style="margin-bottom:1.5rem;">&larr; Volver al inbox</a>
+      <a href="inbox.html" class="btn-udv btn-udv-dark btn-udv-sm" style="margin-bottom:1.5rem;">&larr; Volver al inbox</a>
 
       <div id="cargando" class="udv-alert udv-alert-info">Cargando la asignación…</div>
       <div id="avisoError" class="udv-alert udv-alert-danger" style="display:none;"></div>
@@ -42,10 +42,16 @@
 
         <div id="detComentario"></div>
 
+        <!-- Archivos entregados, por intento -->
+        <div id="detArchivos" style="display:none;margin:1rem 0;">
+          <h2 class="udv-label" style="margin-bottom:.5rem;">Archivos entregados</h2>
+          <ul id="listaArchivos" style="list-style:none;padding:0;margin:0;"></ul>
+        </div>
+
         <div id="detBotones" class="udv-gap-2" style="display:flex;flex-wrap:wrap;margin-top:1rem;"></div>
 
         <div class="udv-form-group" id="obsGroup" style="display:none;margin-top:1rem;max-width:480px;">
-          <label class="udv-label" for="obs">Observación (obligatoria para devolver)</label>
+          <label class="udv-label" for="obs">Observación (obligatoria para devolver, opcional al aprobar)</label>
           <textarea class="udv-textarea" id="obs" placeholder="Escribe la observación antes de devolver…"></textarea>
         </div>
 
@@ -57,7 +63,8 @@
           </div>
           <div class="udv-form-group">
             <label class="udv-label" for="entregaArchivo">Adjuntar evidencia</label>
-            <input class="udv-input" type="file" id="entregaArchivo">
+            <input class="udv-input" type="file" id="entregaArchivo" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
+            <small id="entregaArchivoNota" style="color:var(--udv-text-muted);">PDF, JPG o PNG, hasta 5 MB.</small>
           </div>
           <p id="archivoInfo" style="font-size:.8rem;color:var(--udv-text-muted);margin-bottom:.6rem;"></p>
           <div id="entregaBotones" class="udv-gap-2" style="display:flex;flex-wrap:wrap;"></div>

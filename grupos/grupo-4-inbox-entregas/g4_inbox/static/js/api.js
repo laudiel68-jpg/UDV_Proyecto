@@ -1,6 +1,7 @@
 // =====================================================
 // CAPA DE DATOS DEL INBOX
-// Ya conectado al servidor real 
+// Ya conectado al servidor real — reemplaza los datos de prueba que
+// vivían aquí antes. La pantalla (inbox.js) no cambió nada.
 // =====================================================
 
 const Api = (function () {
@@ -18,7 +19,7 @@ const Api = (function () {
   async function manejarRespuesta(respuesta) {
     if (!respuesta.ok) {
       const cuerpo = await respuesta.json().catch(() => ({}));
-      throw new Error(cuerpo.detail ? JSON.stringify(cuerpo.detail) : "Error del servidor");
+      throw new Error(Sesion.mensajeDeError(cuerpo, respuesta.status));
     }
     return respuesta.json();
   }
@@ -26,21 +27,11 @@ const Api = (function () {
   function obtenerInbox({ q = "", status = "", page = 1, per_page = 20 } = {}) {
     const parametros = new URLSearchParams({ q, page, per_page });
     if (status) parametros.set("status", status);
-    return fetch(
-    `${BASE}/inbox?${parametros}`,
-    {
-        headers: Sesion.encabezados()
-    }
-    ).then(manejarRespuesta);
+    return fetch(`${BASE}/inbox?${parametros}`, { headers: Sesion.encabezados() }).then(manejarRespuesta);
   }
 
   function obtenerResumen() {
-    return fetch(
-    `${BASE}/inbox/summary`,
-    {
-        headers: Sesion.encabezados()
-    }
-    ).then(manejarRespuesta);
+    return fetch(`${BASE}/inbox/summary`, { headers: Sesion.encabezados() }).then(manejarRespuesta);
   }
 
   return { obtenerInbox, obtenerResumen, diasRestantes };
