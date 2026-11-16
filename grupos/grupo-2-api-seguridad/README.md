@@ -47,14 +47,14 @@ El archivo `.env` **nunca se sube** al repositorio. Se copia desde `.env.example
 | Variable | Para qué sirve |
 |-|-|
 | `DATABASE_URL` | Conexión a la base (`mysql+pymysql://...`). Sin ella usa SQLite local. |
-| `SECRET_KEY` | Firma de los JWT. Obligatoria; valor largo y aleatorio. |
+| `SECRET_KEY` | Firma de los JWT. Obligatoria; al menos 32 caracteres, aleatoria y distinta del ejemplo. |
 | `ALGORITHM` | Algoritmo del token (`HS256`). |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Vigencia del token (120 minutos = 7200 segundos). |
 | `CORS_ORIGINS` | Orígenes del frontend permitidos, separados por coma. |
 | `LOGIN_MAX_INTENTOS` | Intentos fallidos antes del bloqueo (5 intentos). |
 | `LOGIN_BLOQUEO_MINUTOS` | Minutos de bloqueo (15 minutos). |
 | `CONTRASENA_MIN` / `CONTRASENA_MAX` | Largo de la contraseña (de 8 a 64 caracteres). |
-| `UPLOAD_DIR` | Carpeta donde se guardan los archivos subidos. |
+| `UPLOAD_DIR` | Carpeta donde se guardan los archivos subidos. En un servidor usa una ruta absoluta dentro de un volumen persistente. |
 
 ## 5. Base de datos
 
