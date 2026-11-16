@@ -2,6 +2,7 @@
 from datetime import datetime
 
 from g2_api.main import app
+from tests.test_users import headers_admin, sembrado  # noqa: F401  (fixtures de la base de prueba)
 
 def _resp(ruta, metodo):
     return app.openapi()["paths"][ruta][metodo]["responses"]
@@ -21,6 +22,17 @@ def test_me_documenta_401_y_ejemplo_objeto():
     r = _resp("/api/v1/me", "get")
     assert "401" in r
     assert isinstance(r["200"]["content"]["application/json"]["example"], dict)
+
+def test_me_ejemplo_coincide_con_la_respuesta_real_y_no_trae_fechas(client, headers_admin):
+    ejemplo = _resp("/api/v1/me", "get")["200"]["content"]["application/json"]["example"]
+    real = client.get("/api/v1/me", headers=headers_admin).json()
+    assert set(ejemplo) == set(real)
+    assert "creado_en" not in ejemplo and "actualizado_en" not in ejemplo
+
+def test_descarga_de_archivos_documenta_la_regla_de_permisos():
+    descripcion = _resp("/api/v1/files/{id}", "get")["200"]["description"]
+    for texto in ("dueño", "admin", "files.download", "docente"):
+        assert texto in descripcion
 
 def test_422_usa_el_formato_comun_de_errores():
     ejemplo = _resp("/api/v1/users", "post")["422"]["content"]["application/json"]["example"]

@@ -26,6 +26,8 @@ _USUARIO = {
     "activo": True, "roles": ["teacher"],
     "creado_en": "2026-10-29T21:30:00Z", "actualizado_en": "2026-10-29T21:30:00Z",
 }
+# GET /me no devuelve las fechas, así que su ejemplo es el usuario sin ellas (H-04, retest del 14-nov).
+_USUARIO_ME = {k: v for k, v in _USUARIO.items() if k not in ("creado_en", "actualizado_en")}
 
 
 def _resp_error(codigo: int, mensaje: str | None = None):
@@ -115,10 +117,14 @@ def completar_openapi(app: FastAPI):
                 if ruta.endswith("/files") and metodo == "post":
                     r["400"] = _resp_error(400)
                 if ruta.endswith("/files/{id}") and metodo == "get":
-                    # Solo el dueño del archivo o un admin lo descarga.
+                    # Lo descarga su dueño, un admin o un rol que no sea docente con files.download.
                     r["403"] = _resp_error(403, "No tienes permiso para acceder a este archivo")
                     if "200" in r:
-                        r["200"]["description"] = "Archivo descargado (solo su dueño o un admin)."
+                        r["200"]["description"] = (
+                            "Archivo descargado. Lo descarga su dueño, un admin o un rol con el permiso "
+                            "files.download que no sea docente (revisor, coordinación, autoridad o auditoría). "
+                            "Cualquier otro usuario recibe 403."
+                        )
                 if "422" in r:
                     r["422"] = _resp_error(422)
                 # Ejemplos reales (antes Swagger mostraba un "string" generico).
@@ -130,7 +136,7 @@ def completar_openapi(app: FastAPI):
                     r["200"] = _resp_ok("Usuario.", _USUARIO)
                 elif ruta.endswith("/me"):
                     r["200"] = _resp_ok("Usuario autenticado con sus roles y permisos.",
-                                        {**_USUARIO, "permisos": ["users.read"]})
+                                        {**_USUARIO_ME, "permisos": ["users.read"]})
                 elif ruta.endswith("/files") and metodo == "post":
                     r["200"] = _resp_ok("Archivo aceptado.", {
                         "file_id": 177, "nombre_interno": "3f2a9c1e-0000-4000-8000-000000000000.pdf"})
