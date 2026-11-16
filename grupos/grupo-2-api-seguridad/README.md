@@ -47,14 +47,14 @@ El archivo `.env` **nunca se sube** al repositorio. Se copia desde `.env.example
 | Variable | Para qué sirve |
 |-|-|
 | `DATABASE_URL` | Conexión a la base (`mysql+pymysql://...`). Sin ella usa SQLite local. |
-| `SECRET_KEY` | Firma de los JWT. Obligatoria; valor largo y aleatorio. |
+| `SECRET_KEY` | Firma de los JWT. Obligatoria; al menos 32 caracteres, aleatoria y distinta del ejemplo. |
 | `ALGORITHM` | Algoritmo del token (`HS256`). |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Vigencia del token (120 minutos = 7200 segundos). |
 | `CORS_ORIGINS` | Orígenes del frontend permitidos, separados por coma. |
 | `LOGIN_MAX_INTENTOS` | Intentos fallidos antes del bloqueo (5 intentos). |
 | `LOGIN_BLOQUEO_MINUTOS` | Minutos de bloqueo (15 minutos). |
 | `CONTRASENA_MIN` / `CONTRASENA_MAX` | Largo de la contraseña (de 8 a 64 caracteres). |
-| `UPLOAD_DIR` | Carpeta donde se guardan los archivos subidos. |
+| `UPLOAD_DIR` | Carpeta donde se guardan los archivos subidos. En un servidor usa una ruta absoluta dentro de un volumen persistente. |
 
 ## 5. Base de datos
 
@@ -94,7 +94,7 @@ En `auditoria` solo se escriben a mano los eventos de acceso (login, login falli
 - Contraseñas solo con hash bcrypt; ninguna respuesta las devuelve.
 - Autorización en el servidor con `Authorization: Bearer <token>`.
 - Errores en el formato común, sin trazas, SQL ni rutas internas.
-- Los archivos de `/files` solo los descarga su dueño o un admin; cualquier otro rol recibe 403.
+- Los archivos de `/files` los descarga su dueño, un admin o un rol que no sea docente con el permiso `files.download` (revisor, coordinación, autoridad o auditoría); cualquier otro usuario recibe 403.
 - Sin credenciales en el código: todo va en `.env`.
 
 ## 7. Estructura
@@ -133,6 +133,7 @@ grupos/grupo-2-api-seguridad/
 │   ├── test_users.py                       # Pruebas de usuarios y roles: 401, 403, 404, 409 y 422. (Elaborado por Randy Torres)
 │   ├── test_errores.py                     # Pruebas del formato de error y de la paginación. (Elaborado por Edgar Domingo)
 │   ├── test_file.py                        # Pruebas de archivos: tipo no permitido, tamaño y descarga. (Elaborado por Fulvio Jiménez)
+│   ├── test_hallazgos_pm.py                # Pruebas de los hallazgos del PM: descarga por rol, archivo eliminado, validaciones 422 y Coordinación. (Elaborado por Daniel Cobos)
 │   └── test_openapi.py                     # Pruebas de que Swagger coincide con lo que responde la API. (Elaborado por Robert Rodríguez)
 └── g2_api/                                 # Paquete con todo el código de la API. (Elaborado por el Grupo 2)
     ├── __init__.py                         # Marca la carpeta como paquete de Python. (Elaborado por Daniel Cobos)
@@ -147,7 +148,7 @@ grupos/grupo-2-api-seguridad/
     │   ├── auth.py                         # Login, logout y /me, con el bloqueo por intentos fallidos. (Elaborado por Daniel Cobos)
     │   ├── users.py                        # Crear, listar, consultar, editar y desactivar usuarios. (Elaborado por Randy Torres)
     │   ├── roles.py                        # Listar roles y crear uno nuevo, solo para el admin. (Elaborado por Randy Torres)
-    │   └── files.py                        # Subir archivos validados y descargarlos solo el dueño o un admin. (Elaborado por Fulvio Jiménez)
+    │   └── files.py                        # Subir archivos validados y descargarlos el dueño, un admin o un rol no docente con permiso. (Elaborado por Fulvio Jiménez)
     ├── middleware/                         # Código que se ejecuta antes o después de cada ruta. (Elaborado por Randy Torres y Edgar Domingo)
     │   ├── __init__.py                     # Marca la carpeta como paquete de Python. (Elaborado por Daniel Cobos)
     │   ├── auth_middleware.py              # Exige un rol permitido y responde 403 si no lo tiene. (Elaborado por Randy Torres)
@@ -162,7 +163,7 @@ grupos/grupo-2-api-seguridad/
 
 | Persona | Cuenta de GitHub | Archivos |
 |-|-|-|
-| Daniel - Persona 1 (Coordinador) | `dancobs` | `routers/auth.py`, `seguridad.py`, `tests/test_auth.py`, `GUIA_GRUPO2.md` |
+| Daniel - Persona 1 (Coordinador) | `dancobs` | `routers/auth.py`, `seguridad.py`, `tests/test_auth.py`, `tests/test_hallazgos_pm.py`, `GUIA_GRUPO2.md` |
 | Randy - Persona 2 | `rtorresixcoy375` | `routers/users.py`, `routers/roles.py`, `middleware/auth_middleware.py`, `tests/test_users.py` |
 | Edgar - Persona 3 | `zeusgeo99-code` | `middleware/error_handler.py`, `utils/paginacion.py`, `utils/registro.py`, `tests/test_errores.py` |
 | Fulvio - Persona 4 | `Ful55` | `routers/files.py`, `frontend-login/`, `tests/test_file.py` |
